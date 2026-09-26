@@ -1,0 +1,13 @@
+services:
+  cadence:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      CADENCE_TOKEN: ${CADENCE_TOKEN:-change-me}
+    volumes:
+      - cadence-data:/data
+    restart: unless-stopped
+
+volumes:
+  cadence-data:

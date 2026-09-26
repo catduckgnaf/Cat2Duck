@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <TextView
+        android:id="@+id/widget_heading"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="serif"
+        android:text="Today"
+        android:textColor="#F4F1EA"
+        android:textSize="20sp" />
+
+    <TextView
+        android:id="@+id/widget_sub"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="6dp"
+        android:textColor="#B7B1A6"
+        android:textSize="12sp" />
+
+    <LinearLayout android:id="@+id/row0" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:minHeight="36dp" android:orientation="horizontal">
+        <TextView android:id="@+id/check0" android:layout_width="22dp" android:layout_height="22dp" android:layout_marginEnd="10dp" android:background="@drawable/widget_check" />
+        <TextView android:id="@+id/title0" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="#1C1B19" android:textSize="15sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row1" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:minHeight="36dp" android:orientation="horizontal">
+        <TextView android:id="@+id/check1" android:layout_width="22dp" android:layout_height="22dp" android:layout_marginEnd="10dp" android:background="@drawable/widget_check" />
+        <TextView android:id="@+id/title1" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="#1C1B19" android:textSize="15sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row2" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:minHeight="36dp" android:orientation="horizontal">
+        <TextView android:id="@+id/check2" android:layout_width="22dp" android:layout_height="22dp" android:layout_marginEnd="10dp" android:background="@drawable/widget_check" />
+        <TextView android:id="@+id/title2" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="#1C1B19" android:textSize="15sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row3" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:minHeight="36dp" android:orientation="horizontal">
+        <TextView android:id="@+id/check3" android:layout_width="22dp" android:layout_height="22dp" android:layout_marginEnd="10dp" android:background="@drawable/widget_check" />
+        <TextView android:id="@+id/title3" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="#1C1B19" android:textSize="15sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row4" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:minHeight="36dp" android:orientation="horizontal">
+        <TextView android:id="@+id/check4" android:layout_width="22dp" android:layout_height="22dp" android:layout_marginEnd="10dp" android:background="@drawable/widget_check" />
+        <TextView android:id="@+id/title4" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="#1C1B19" android:textSize="15sp" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,228 @@
+@import "tailwindcss";
+@import "react-day-picker/style.css";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Newsreader", Georgia, "Times New Roman", serif;
+
+  --color-paper: #141311;
+  --color-paper-2: #23211e;
+  --color-card: #1c1b18;
+  --color-ink: #f4f1ea;
+  --color-muted: #b7b1a6;
+  --color-faint: #8d877d;
+  --color-line: #2e2c28;
+  --color-line-strong: #3f3b35;
+  --color-danger: #f0b2a8;
+  --color-danger-soft: #3a2421;
+  --color-sage: #b7cfc0;
+
+  --text-display: clamp(2.25rem, 1.6rem + 2vw, 3.25rem);
+  --text-display--line-height: 1.1;
+  --text-display--letter-spacing: -0.03em;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}
+
+.field {
+  min-height: 2.75rem;
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-card);
+  padding: 0.5rem 0.75rem;
+  color: var(--color-ink);
+}
+
+.field::placeholder {
+  color: var(--color-faint);
+}
+
+.field:focus-visible,
+.notes-area:focus-visible,
+.title-input:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+.notes-area {
+  min-height: 12rem;
+  width: 100%;
+  resize: vertical;
+  border-radius: 1rem;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-card);
+  padding: 0.875rem 1rem;
+  color: var(--color-ink);
+  line-height: 1.5;
+}
+
+.title-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 1.875rem;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
+.title-input::placeholder {
+  color: var(--color-faint);
+}
+
+.safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgb(0 0 0 / 0.66);
+}
+
+.modal-content {
+  position: fixed;
+  z-index: 51;
+  left: 50%;
+  top: 50%;
+  width: min(32rem, calc(100% - 2rem));
+  max-height: min(85dvh, 44rem);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  border-radius: 1.5rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-paper);
+  padding: 1.25rem;
+}
+
+@media (max-width: 640px) {
+  .modal-content {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: 92dvh;
+    transform: none;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .modal-overlay {
+    animation: cadence-fade 150ms ease;
+  }
+
+  .modal-content {
+    animation: cadence-pop 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+@media (max-width: 640px) and (prefers-reduced-motion: no-preference) {
+  .modal-content {
+    animation: cadence-sheet 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+@keyframes cadence-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cadence-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes cadence-sheet {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.cadence-cal {
+  --rdp-accent-color: #f4f1ea;
+  --rdp-accent-background-color: #2c2a26;
+  --rdp-today-color: #f4f1ea;
+  --rdp-day-height: 44px;
+  --rdp-day-width: 44px;
+  --rdp-day_button-height: 40px;
+  --rdp-day_button-width: 40px;
+  --rdp-weekday-opacity: 0.7;
+}
+
+.cadence-cal .rdp-root {
+  margin-inline: auto;
+  color: var(--color-ink);
+}
+
+.cadence-cal .rdp-selected {
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.cadence-cal .rdp-day_button {
+  color: var(--color-ink);
+}
+
+.cadence-cal .rdp-selected .rdp-day_button {
+  background: var(--color-ink);
+  color: var(--color-paper);
+}
