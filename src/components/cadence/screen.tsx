@@ -514,6 +514,8 @@ function Composer({ view, focus, categoryFilter }: { view: ViewId; focus: string
         setTitle("");
         setNotes("");
         setNotesOpen(false);
+        setDate(defaultDate);
+        setCategoryId(categoryFilter);
         setRepeat(view === "repeats" ? { kind: "daily" } : { kind: "none" });
       }}
     >

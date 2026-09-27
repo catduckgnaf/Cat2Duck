@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Cat2Duck</Name>
+  <Repository>catduckgnaf/cat2duck:latest</Repository>
+  <Registry>https://hub.docker.com/r/catduckgnaf/cat2duck</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/catduckgnaf/Cat2Duck/issues</Support>
+  <Project>https://github.com/catduckgnaf/Cat2Duck</Project>
+  <Overview>Cat2Duck (Cadence) unified task manager and synchronization server. Serves the responsive Web UI and /v1/state sync API from a single container.</Overview>
+  <Category>Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8793]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/catduckgnaf/Cat2Duck/main/public/favicon.svg</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web &amp; Sync Port" Target="8787" Default="8793" Mode="tcp" Description="Host port for Web UI and sync API (use 8793 to avoid collision with Readarr on 8787)" Type="Port" Display="always" Required="true" Mask="false">8793</Config>
+  <Config Name="Appdata Storage" Target="/data" Default="/mnt/user/appdata/cat2duck" Mode="rw" Description="Persistent directory for state.json" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/cat2duck</Config>
+  <Config Name="Cadence Auth Token" Target="CADENCE_TOKEN" Default="" Description="Bearer secret token used by Web and Android clients to sync" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Port Variable" Target="PORT" Default="8787" Description="Internal container port" Type="Variable" Display="advanced" Required="false" Mask="false">8787</Config>
+  <Config Name="Data Path Variable" Target="DATA_PATH" Default="/data/state.json" Description="Internal path to JSON state" Type="Variable" Display="advanced" Required="false" Mask="false">/data/state.json</Config>
+  <Config Name="Static Assets Dir" Target="STATIC_DIR" Default="/app/static" Description="Internal path to built Web UI" Type="Variable" Display="advanced" Required="false" Mask="false">/app/static</Config>
+</Container>

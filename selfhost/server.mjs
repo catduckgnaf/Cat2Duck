@@ -1,20 +1,30 @@
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { contentTypeFor, resolveStaticPath } from "./static-handler.mjs";
 
 const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.CADENCE_TOKEN || "";
 const DATA = process.env.DATA_PATH || "/data/state.json";
+const STATIC_DIR = process.env.STATIC_DIR || "/app/static";
 const MAX_BODY = 1_500_000;
+
+if (!TOKEN || TOKEN === "change-me") {
+  console.warn("WARNING: CADENCE_TOKEN is unset or using default 'change-me'. Secure with a strong bearer token.");
+}
 
 function readState() {
   try {
+    if (!existsSync(DATA)) {
+      return { tasks: [], categories: [] };
+    }
     const parsed = JSON.parse(readFileSync(DATA, "utf8"));
     return {
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
       categories: Array.isArray(parsed.categories) ? parsed.categories : [],
     };
-  } catch {
+  } catch (err) {
+    console.error("Failed to read server state file:", err.message);
     return { tasks: [], categories: [] };
   }
 }
@@ -31,13 +41,11 @@ function writeState(state) {
   return writing;
 }
 
-function send(res, status, body, type = "application/json; charset=utf-8") {
+function send(res, status, body, type = "application/json; charset=utf-8", headers = {}) {
   res.writeHead(status, {
     "Content-Type": type,
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
     "Cache-Control": "no-store",
+    ...headers,
   });
   res.end(body);
 }
@@ -66,23 +74,43 @@ function readBody(req) {
   });
 }
 
+function serveStatic(res, pathname) {
+  const filePath = resolveStaticPath(STATIC_DIR, pathname === "/" ? "/index.html" : pathname);
+  if (filePath && existsSync(filePath)) {
+    const stat = statSync(filePath);
+    if (stat.isFile()) {
+      const type = contentTypeFor(filePath);
+      const isAsset = pathname.startsWith("/assets/") || pathname.startsWith("/__grok/");
+      const cacheHeader = isAsset ? "public, max-age=31536000, immutable" : "no-cache";
+      try {
+        const content = readFileSync(filePath);
+        send(res, 200, content, type, { "Cache-Control": cacheHeader });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  // SPA fallback to index.html for text/html requests
+  const fallbackIndex = join(STATIC_DIR, "index.html");
+  if (existsSync(fallbackIndex)) {
+    try {
+      const content = readFileSync(fallbackIndex);
+      send(res, 200, content, "text/html; charset=utf-8", { "Cache-Control": "no-cache" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
-  if (req.method === "OPTIONS") {
-    send(res, 204, "");
-    return;
-  }
 
-  if (url.pathname === "/" && req.method === "GET") {
-    send(
-      res,
-      200,
-      "<!doctype html><title>Cadence</title><body style=\"font-family:sans-serif\"><h1>Cadence server</h1><p>The list API is running.</p></body>",
-      "text/html; charset=utf-8",
-    );
-    return;
-  }
-
+  // Health endpoint
   if (url.pathname === "/health" && req.method === "GET") {
     if (!authorized(req)) {
       send(res, TOKEN ? 401 : 503, JSON.stringify({ error: TOKEN ? "Unauthorized" : "Set CADENCE_TOKEN" }));
@@ -92,6 +120,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // API sync endpoint
   if (url.pathname === "/v1/state" && (req.method === "GET" || req.method === "PUT")) {
     if (!authorized(req)) {
       send(res, TOKEN ? 401 : 503, JSON.stringify({ error: TOKEN ? "Unauthorized" : "Set CADENCE_TOKEN" }));
@@ -118,6 +147,13 @@ const server = createServer(async (req, res) => {
       send(res, 400, JSON.stringify({ error: "Invalid JSON" }));
     }
     return;
+  }
+
+  // Static files / Web UI fallback
+  if (req.method === "GET" || req.method === "HEAD") {
+    if (serveStatic(res, url.pathname)) {
+      return;
+    }
   }
 
   send(res, 404, JSON.stringify({ error: "Not found" }));

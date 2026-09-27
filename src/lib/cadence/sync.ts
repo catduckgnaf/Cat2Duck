@@ -1,4 +1,4 @@
-import { activeCategories, type Category, type Repeat, type Task } from "./model";
+import { activeCategories, type Category, type Repeat, type Task } from "./model.ts";
 
 export type CadenceDoc = {
   tasks: Task[];
