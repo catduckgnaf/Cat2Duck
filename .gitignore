@@ -3,3 +3,9 @@ node_modules/
 .github_repo
 .env
 .env.*
+.vercel/
+dist/
+.grok/preview.log
+.grok/preview.pid
+screenshots/dev-smoke.png
+
