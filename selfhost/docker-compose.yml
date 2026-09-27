@@ -1,10 +1,16 @@
 services:
   cadence:
-    build: .
+    build:
+      context: ..
+      dockerfile: selfhost/Dockerfile
     ports:
-      - "8787:8787"
+      # Bind to host port 8793 as verified by Networking review (8787 occupied by Readarr)
+      - "127.0.0.1:8793:8787"
     environment:
       CADENCE_TOKEN: ${CADENCE_TOKEN:-change-me}
+      PORT: 8787
+      DATA_PATH: /data/state.json
+      STATIC_DIR: /app/static
     volumes:
       - cadence-data:/data
     restart: unless-stopped
