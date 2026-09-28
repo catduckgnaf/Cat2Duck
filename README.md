@@ -66,4 +66,4 @@ Tasks remain in browser storage unless synchronization is configured. The server
 
 ## License
 
-No open source license has been selected. All rights remain with the repository owner unless a license is added later.
+Cat2Duck is open source software licensed under the [MIT License](LICENSE).
