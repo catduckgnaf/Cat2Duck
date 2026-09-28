@@ -11,8 +11,8 @@ import {
   type Repeat,
   type Task,
   type ViewId,
-} from "./model";
-import { mergeById, pullDoc, pushDoc, type CadenceDoc } from "./sync";
+} from "./model.ts";
+import { mergeById, mergeDocs, syncDoc, type CadenceDoc } from "./sync.ts";
 
 export type Notice = {
   text: string;
@@ -42,6 +42,7 @@ type State = {
   serverToken: string;
   syncStatus: "off" | "syncing" | "ok" | "error";
   syncError: string | null;
+  lastSyncedAt: string | null;
   notice: Notice;
   setView: (view: ViewId) => void;
   setFocusDate: (date: string) => void;
@@ -91,6 +92,7 @@ export const useCadence = create<State>()(
       serverToken: "",
       syncStatus: "off",
       syncError: null,
+      lastSyncedAt: null,
       notice: null,
       setView: (view) => set({ view }),
       setFocusDate: (focusDate) => set({ focusDate, view: "day" }),
@@ -252,10 +254,11 @@ export const useCadence = create<State>()(
     }),
     {
       name: "cadence",
-      version: 2,
+      version: 3,
       migrate: (persisted, version) => {
-        const state = (persisted ?? {}) as { view?: ViewId };
-        if (version < 2) return { ...state, view: "feed" as const };
+        const state = (persisted ?? {}) as { view?: ViewId; serverToken?: string };
+        if (version < 2) state.view = "feed";
+        if (version < 3) delete state.serverToken;
         return state;
       },
       storage: createJSONStorage(() => localStorage),
@@ -270,7 +273,6 @@ export const useCadence = create<State>()(
         showRepeating: state.showRepeating,
         compact: state.compact,
         serverUrl: state.serverUrl,
-        serverToken: state.serverToken,
       }),
     },
   ),
@@ -316,22 +318,41 @@ export async function bootCadence() {
 }
 
 let pushing = false;
+let pendingSync = false;
 
 export async function syncNow() {
-  const state = useCadence.getState();
-  if (!state.serverUrl || !state.serverToken) return;
-  useCadence.setState({ syncStatus: "syncing", syncError: null });
+  const initial = useCadence.getState();
+  if (!initial.serverUrl || !initial.serverToken) return;
+  if (pushing) {
+    pendingSync = true;
+    return;
+  }
+
   pushing = true;
+  useCadence.setState({ syncStatus: "syncing", syncError: null });
+
   try {
-    const remote = await pullDoc(state.serverUrl, state.serverToken);
-    const latest = useCadence.getState();
-    const merged = {
-      tasks: mergeById(latest.tasks, remote.tasks),
-      categories: mergeById(latest.categories, remote.categories),
-    };
-    useCadence.setState({ ...merged, syncStatus: "syncing" });
-    await pushDoc(latest.serverUrl, latest.serverToken, merged);
-    useCadence.setState({ syncStatus: "ok", syncError: null });
+    while (true) {
+      pendingSync = false;
+      const snapshot = useCadence.getState();
+      const merged = await syncDoc(snapshot.serverUrl, snapshot.serverToken, {
+        tasks: snapshot.tasks,
+        categories: snapshot.categories,
+      });
+
+      const current = useCadence.getState();
+      const currentDoc = { tasks: current.tasks, categories: current.categories };
+      const combined = mergeDocs(currentDoc, merged);
+
+      useCadence.setState({
+        ...combined,
+        syncStatus: "ok",
+        syncError: null,
+        lastSyncedAt: nowIso(),
+      });
+
+      if (!pendingSync) break;
+    }
   } catch (error) {
     useCadence.setState({
       syncStatus: "error",
@@ -343,22 +364,7 @@ export async function syncNow() {
 }
 
 export async function pushNow() {
-  const state = useCadence.getState();
-  if (!state.serverUrl || !state.serverToken || pushing) return;
-  pushing = true;
-  useCadence.setState({ syncStatus: "syncing", syncError: null });
-  try {
-    const latest = useCadence.getState();
-    await pushDoc(latest.serverUrl, latest.serverToken, { tasks: latest.tasks, categories: latest.categories });
-    useCadence.setState({ syncStatus: "ok", syncError: null });
-  } catch (error) {
-    useCadence.setState({
-      syncStatus: "error",
-      syncError: error instanceof Error ? error.message : "Could not reach the server.",
-    });
-  } finally {
-    pushing = false;
-  }
+  await syncNow();
 }
 
 export function bindSync() {

@@ -3,7 +3,7 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 RUN npm run build
@@ -45,6 +45,6 @@ VOLUME /data
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD node -e 'require("node:http").get("http://localhost:8787/health", (res) => { process.exit(res.statusCode === 200 || res.statusCode === 401 ? 0 : 1); }).on("error", () => process.exit(1));'
+  CMD node -e 'require("node:http").get("http://localhost:8787/health", (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on("error", () => process.exit(1));'
 
 CMD ["node", "server.mjs"]

@@ -4,16 +4,22 @@ services:
       context: ..
       dockerfile: selfhost/Dockerfile
     ports:
-      # Bind to host port 8793 as verified by Networking review (8787 occupied by Readarr)
-      - "127.0.0.1:8793:8787"
+      - "${CAT2DUCK_BIND:-0.0.0.0}:${CAT2DUCK_PORT:-8793}:8787"
     environment:
-      CADENCE_TOKEN: ${CADENCE_TOKEN:-change-me}
+      CADENCE_TOKEN: ${CADENCE_TOKEN:?Set CADENCE_TOKEN to a random secret of at least 32 characters}
+      CADENCE_ALLOWED_ORIGINS: ${CADENCE_ALLOWED_ORIGINS:-}
       PORT: 8787
       DATA_PATH: /data/state.json
       STATIC_DIR: /app/static
     volumes:
       - cadence-data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:http').get('http://localhost:8787/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
 
 volumes:
   cadence-data:
