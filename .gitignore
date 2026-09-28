@@ -8,4 +8,6 @@ dist/
 .grok/preview.log
 .grok/preview.pid
 screenshots/dev-smoke.png
+docs/qa/test-results/
+playwright-report/
 

@@ -86,6 +86,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const serverToken = useCadence((s) => s.serverToken);
   const syncStatus = useCadence((s) => s.syncStatus);
   const syncError = useCadence((s) => s.syncError);
+  const lastSyncedAt = useCadence((s) => s.lastSyncedAt);
   const setServer = useCadence((s) => s.setServer);
   const importDoc = useCadence((s) => s.importDoc);
   const resetSamples = useCadence((s) => s.resetSamples);
@@ -152,9 +153,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       <section>
         <SectionLabel>Your server</SectionLabel>
         <p className="mt-2 text-sm text-pretty text-muted">
-          Optional. Leave this blank to keep everything here. The download below is a small server plus an Android app
-          with a home-screen widget. Put the server on your own machine, then paste its address and token here and in
-          the phone app.
+          Optional. Leave this blank to keep everything here. The address is remembered, but the token is held only for
+          this open browser session. External clients such as Android use the same server token separately.
         </p>
         <label className="mt-3 block text-sm font-medium" htmlFor="server-url">
           Address
@@ -183,18 +183,28 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <Button variant="primary" onClick={() => void saveServer()}>
             Save and sync
           </Button>
+          <Button
+            onClick={() => {
+              setServer("", "");
+              setUrl("");
+              setToken("");
+              setMessage("Disconnected. Local tasks were not changed.");
+            }}
+          >
+            Disconnect
+          </Button>
           <a className="inline-flex min-h-11 items-center rounded-full bg-paper-2 px-4 text-sm font-medium text-ink" href="/cadence-pack.zip" download>
             Download server and Android app
           </a>
         </div>
-        <p className="mt-2 text-sm text-muted">
+        <p className="mt-2 text-sm text-muted" role="status" aria-live="polite">
           {message ??
             (syncStatus === "ok"
-              ? "Synced."
+              ? `Synced${lastSyncedAt ? ` ${new Date(lastSyncedAt).toLocaleString()}` : ""}.`
               : syncStatus === "syncing"
                 ? "Syncing…"
                 : syncStatus === "error"
-                  ? syncError
+                  ? `Sync failed: ${syncError ?? "Check the address, token, and server status."}`
                   : "Not connected.")}
         </p>
       </section>

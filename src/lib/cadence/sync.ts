@@ -5,6 +5,11 @@ export type CadenceDoc = {
   categories: Category[];
 };
 
+export type VersionedCadenceDoc = {
+  doc: CadenceDoc;
+  revision: string;
+};
+
 const REPEAT_KINDS = new Set(["none", "daily", "weekdays", "weekly", "monthly", "interval", "days"]);
 
 function isRepeat(value: unknown): value is Repeat {
@@ -56,6 +61,13 @@ export function mergeById<T extends { id: string; updatedAt: string; deleted?: b
   });
 }
 
+function mergeDocs(local: CadenceDoc, remote: CadenceDoc): CadenceDoc {
+  return {
+    tasks: mergeById(local.tasks, remote.tasks),
+    categories: mergeById(local.categories, remote.categories),
+  };
+}
+
 export function normalizeServerUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return "";
@@ -69,6 +81,8 @@ export function normalizeServerUrl(raw: string): string | null {
   }
 }
 
+class ConflictError extends Error {}
+
 async function request(url: string, token: string, path: string, init?: RequestInit): Promise<Response> {
   let res: Response;
   try {
@@ -78,6 +92,7 @@ async function request(url: string, token: string, path: string, init?: RequestI
         Accept: "application/json",
         Authorization: `Bearer ${token}`,
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...init?.headers,
       },
     });
   } catch {
@@ -85,24 +100,46 @@ async function request(url: string, token: string, path: string, init?: RequestI
   }
   if (!res.ok) {
     const text = (await res.text().catch(() => "")).slice(0, 180);
+    if (res.status === 409) throw new ConflictError(text || "State changed on another device.");
     throw new Error(text || `Server responded ${res.status}.`);
   }
   return res;
 }
 
-export async function pullDoc(url: string, token: string): Promise<CadenceDoc> {
+export async function pullDoc(url: string, token: string): Promise<VersionedCadenceDoc> {
   const res = await request(url, token, "/v1/state");
-  return readDoc(await res.json());
+  const revision = res.headers.get("ETag");
+  if (!revision) throw new Error("Server did not provide a state revision.");
+  return { doc: readDoc(await res.json()), revision };
 }
 
-export async function pushDoc(url: string, token: string, doc: CadenceDoc): Promise<void> {
-  await request(url, token, "/v1/state", {
+export async function pushDoc(url: string, token: string, doc: CadenceDoc, revision: string): Promise<string> {
+  const res = await request(url, token, "/v1/state", {
     method: "PUT",
+    headers: { "If-Match": revision },
     body: JSON.stringify({
       tasks: doc.tasks,
       categories: activeCategories(doc.categories).concat(doc.categories.filter((c) => c.deleted)),
     }),
   });
+  const nextRevision = res.headers.get("ETag");
+  if (!nextRevision) throw new Error("Server did not confirm the new state revision.");
+  return nextRevision;
+}
+
+export async function syncDoc(url: string, token: string, local: CadenceDoc, maxAttempts = 3): Promise<CadenceDoc> {
+  let candidate = local;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const remote = await pullDoc(url, token);
+    candidate = mergeDocs(candidate, remote.doc);
+    try {
+      await pushDoc(url, token, candidate, remote.revision);
+      return candidate;
+    } catch (error) {
+      if (!(error instanceof ConflictError) || attempt === maxAttempts - 1) throw error;
+    }
+  }
+  return candidate;
 }
 
 export async function checkServer(url: string, token: string): Promise<void> {
