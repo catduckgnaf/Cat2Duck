@@ -61,7 +61,7 @@ export function mergeById<T extends { id: string; updatedAt: string; deleted?: b
   });
 }
 
-function mergeDocs(local: CadenceDoc, remote: CadenceDoc): CadenceDoc {
+export function mergeDocs(local: CadenceDoc, remote: CadenceDoc): CadenceDoc {
   return {
     tasks: mergeById(local.tasks, remote.tasks),
     categories: mergeById(local.categories, remote.categories),

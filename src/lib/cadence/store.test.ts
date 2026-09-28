@@ -80,6 +80,58 @@ test("persisted state excludes the bearer token", () => {
   assert.equal("serverToken" in persisted, false);
 });
 
+test("concurrent local edits while sync is in flight are preserved", async () => {
+  resetState();
+  let releaseServer: () => void = () => {};
+  const serverHeld = new Promise<void>((resolve) => {
+    releaseServer = resolve;
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/health")) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (url.endsWith("/v1/state") && (!init?.method || init.method === "GET")) {
+      await serverHeld;
+      return new Response(JSON.stringify({ tasks: [], categories: [] }), {
+        status: 200,
+        headers: { ETag: '"0"' },
+      });
+    }
+    if (url.endsWith("/v1/state") && init?.method === "PUT") {
+      return new Response(JSON.stringify({ ok: true, revision: 1 }), {
+        status: 200,
+        headers: { ETag: '"1"' },
+      });
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    useCadence.getState().setServer("https://tasks.example.com", "session-secret");
+    const syncPromise = syncNow();
+
+    useCadence.getState().addTask({
+      title: "Concurrent local task",
+      notes: "must not be wiped",
+      categoryId: null,
+      date: "2026-09-28",
+      repeat: { kind: "none" },
+    });
+
+    releaseServer();
+    await syncPromise;
+
+    const state = useCadence.getState();
+    assert.equal(state.syncStatus, "ok");
+    assert.equal(state.tasks.some((t) => t.title === "Concurrent local task"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("failed synchronization records an actionable connection error", async () => {
   resetState();
   const originalFetch = globalThis.fetch;

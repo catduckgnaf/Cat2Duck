@@ -12,7 +12,7 @@ import {
   type Task,
   type ViewId,
 } from "./model.ts";
-import { mergeById, syncDoc, type CadenceDoc } from "./sync.ts";
+import { mergeById, mergeDocs, syncDoc, type CadenceDoc } from "./sync.ts";
 
 export type Notice = {
   text: string;
@@ -318,16 +318,41 @@ export async function bootCadence() {
 }
 
 let pushing = false;
+let pendingSync = false;
 
 export async function syncNow() {
-  const state = useCadence.getState();
-  if (!state.serverUrl || !state.serverToken) return;
-  useCadence.setState({ syncStatus: "syncing", syncError: null });
+  const initial = useCadence.getState();
+  if (!initial.serverUrl || !initial.serverToken) return;
+  if (pushing) {
+    pendingSync = true;
+    return;
+  }
+
   pushing = true;
+  useCadence.setState({ syncStatus: "syncing", syncError: null });
+
   try {
-    const latest = useCadence.getState();
-    const merged = await syncDoc(latest.serverUrl, latest.serverToken, { tasks: latest.tasks, categories: latest.categories });
-    useCadence.setState({ ...merged, syncStatus: "ok", syncError: null, lastSyncedAt: nowIso() });
+    while (true) {
+      pendingSync = false;
+      const snapshot = useCadence.getState();
+      const merged = await syncDoc(snapshot.serverUrl, snapshot.serverToken, {
+        tasks: snapshot.tasks,
+        categories: snapshot.categories,
+      });
+
+      const current = useCadence.getState();
+      const currentDoc = { tasks: current.tasks, categories: current.categories };
+      const combined = mergeDocs(currentDoc, merged);
+
+      useCadence.setState({
+        ...combined,
+        syncStatus: "ok",
+        syncError: null,
+        lastSyncedAt: nowIso(),
+      });
+
+      if (!pendingSync) break;
+    }
   } catch (error) {
     useCadence.setState({
       syncStatus: "error",

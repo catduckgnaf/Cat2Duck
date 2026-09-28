@@ -195,29 +195,58 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         send(res, 428, JSON.stringify({ error: "If-Match revision required" }), undefined, headers);
         return;
       }
-      if (expectedRevision !== state.revision) {
-        send(res, 409, JSON.stringify({ error: "State changed", revision: state.revision }), undefined, { ...headers, ETag: etag(state.revision) });
+
+      let rawBody = "";
+      try {
+        rawBody = await readBody(req, maxBody);
+      } catch (error) {
+        req.resume();
+        const status = error?.statusCode === 413 ? 413 : 400;
+        send(res, status, JSON.stringify({ error: status === 413 ? "Request body too large" : "Invalid request" }), undefined, headers);
         return;
       }
 
+      let parsed;
       try {
-        const parsed = JSON.parse(await readBody(req, maxBody));
-        if (!Array.isArray(parsed.tasks) || !Array.isArray(parsed.categories)) {
-          send(res, 400, JSON.stringify({ error: "Expected tasks and categories arrays" }), undefined, headers);
-          return;
-        }
-        if (parsed.tasks.length > 5000 || parsed.categories.length > 200) {
-          send(res, 400, JSON.stringify({ error: "Too many items" }), undefined, headers);
-          return;
+        parsed = JSON.parse(rawBody);
+      } catch {
+        send(res, 400, JSON.stringify({ error: "Invalid JSON" }), undefined, headers);
+        return;
+      }
+
+      if (!Array.isArray(parsed.tasks) || !Array.isArray(parsed.categories)) {
+        send(res, 400, JSON.stringify({ error: "Expected tasks and categories arrays" }), undefined, headers);
+        return;
+      }
+      if (parsed.tasks.length > 5000 || parsed.categories.length > 200) {
+        send(res, 400, JSON.stringify({ error: "Too many items" }), undefined, headers);
+        return;
+      }
+
+      const nextPromise = writing.catch(() => {}).then(async () => {
+        if (expectedRevision !== state.revision) {
+          const conflict = new Error("State changed");
+          conflict.statusCode = 409;
+          conflict.revision = state.revision;
+          throw conflict;
         }
         const nextState = { revision: state.revision + 1, tasks: parsed.tasks, categories: parsed.categories };
-        writing = writing.then(() => persistState(dataPath, nextState));
-        await writing;
+        await persistState(dataPath, nextState);
         state = nextState;
-        send(res, 200, JSON.stringify({ ok: true, revision: state.revision }), undefined, { ...headers, ETag: etag(state.revision) });
+        return nextState.revision;
+      });
+
+      writing = nextPromise.catch(() => {});
+
+      try {
+        const savedRevision = await nextPromise;
+        send(res, 200, JSON.stringify({ ok: true, revision: savedRevision }), undefined, { ...headers, ETag: etag(savedRevision) });
       } catch (error) {
-        const status = error?.statusCode === 413 ? 413 : 400;
-        send(res, status, JSON.stringify({ error: status === 413 ? "Request body too large" : "Invalid JSON" }), undefined, headers);
+        if (error?.statusCode === 409) {
+          send(res, 409, JSON.stringify({ error: "State changed", revision: error.revision }), undefined, { ...headers, ETag: etag(error.revision) });
+          return;
+        }
+        send(res, 500, JSON.stringify({ error: "Failed to persist state" }), undefined, headers);
       }
       return;
     }

@@ -108,6 +108,47 @@ test("security headers are returned for web responses", async () => {
   });
 });
 
+test("concurrent writes with the same revision result in exactly one winner and one 409", async () => {
+  await withServer(async ({ url }) => {
+    const makeBody = (title) => JSON.stringify({ tasks: [{ id: "t1", title, notes: "", categoryId: null, date: "2026-09-28", completedAt: null, repeat: { kind: "none" }, createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" }], categories: [] });
+    const [res1, res2] = await Promise.all([
+      fetch(`${url}/v1/state`, { method: "PUT", headers: auth({ "Content-Type": "application/json", "If-Match": '"0"' }), body: makeBody("First") }),
+      fetch(`${url}/v1/state`, { method: "PUT", headers: auth({ "Content-Type": "application/json", "If-Match": '"0"' }), body: makeBody("Second") }),
+    ]);
+    const statuses = [res1.status, res2.status].sort();
+    assert.deepEqual(statuses, [200, 409]);
+    const finalState = await fetch(`${url}/v1/state`, { headers: auth() });
+    assert.equal(finalState.headers.get("etag"), '"1"');
+  });
+});
+
+test("write queue recovers from an individual persistence failure", async () => {
+  await withServer(async ({ dir }) => {
+    const badPath = join(dir, "cannot-write-here");
+    await writeFile(badPath, "existing-file");
+    const brokenServer = createCadenceServer({ token: TOKEN, dataPath: join(badPath, "nested.json"), staticDir: dir });
+    await new Promise((resolve) => brokenServer.listen(0, "127.0.0.1", resolve));
+    const brokenUrl = `http://127.0.0.1:${brokenServer.address().port}`;
+    try {
+      const failed = await fetch(`${brokenUrl}/v1/state`, {
+        method: "PUT",
+        headers: auth({ "Content-Type": "application/json", "If-Match": '"0"' }),
+        body: JSON.stringify({ tasks: [], categories: [] }),
+      });
+      assert.equal(failed.status, 500);
+
+      const stale = await fetch(`${brokenUrl}/v1/state`, {
+        method: "PUT",
+        headers: auth({ "Content-Type": "application/json", "If-Match": '"999"' }),
+        body: JSON.stringify({ tasks: [], categories: [] }),
+      });
+      assert.equal(stale.status, 409);
+    } finally {
+      await new Promise((resolve, reject) => brokenServer.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+});
+
 test("invalid primary state recovers from the last known good backup", async () => {
   const dir = await mkdtemp(join(tmpdir(), "cat2duck-recovery-"));
   const dataPath = join(dir, "state.json");
