@@ -24,7 +24,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +49,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(background = Paper, surface = Paper, primary = Ink, onPrimary = Paper)) {
+            MaterialTheme(colorScheme = darkColorScheme(background = Paper, surface = Paper, primary = Ink, onPrimary = Paper, onSurface = Ink, onBackground = Ink)) {
                 Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), color = Paper) {
                     CadenceApp()
                 }
@@ -121,7 +122,7 @@ private fun CadenceApp() {
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), label = { Text("Add a task") }, singleLine = true)
+            OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), label = { Text("Add a task") }, singleLine = true, colors = darkFieldColors())
             Button(onClick = {
                 val title = draft.trim()
                 if (title.isEmpty()) return@Button
@@ -166,6 +167,18 @@ private fun Filter(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+private fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = Ink,
+    unfocusedTextColor = Ink,
+    disabledTextColor = Muted,
+    cursorColor = Ink,
+    focusedLabelColor = Ink,
+    unfocusedLabelColor = Muted,
+    focusedBorderColor = Ink,
+    unfocusedBorderColor = Muted,
+)
+
+@Composable
 private fun DetailDialog(task: Task, categories: List<Category>, onDismiss: () -> Unit, onSave: (Task) -> Unit) {
     var title by remember { mutableStateOf(task.title) }
     var notes by remember { mutableStateOf(task.notes) }
@@ -175,13 +188,13 @@ private fun DetailDialog(task: Task, categories: List<Category>, onDismiss: () -
         title = { Text("Details") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(title, { title = it }, label = { Text("Task") })
+                OutlinedTextField(title, { title = it }, label = { Text("Task") }, colors = darkFieldColors())
                 Text("Category", color = Muted)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Filter("None", categoryId == null) { categoryId = null }
                     categories.forEach { category -> Filter(category.name, categoryId == category.id) { categoryId = category.id } }
                 }
-                OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, minLines = 4)
+                OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, minLines = 4, colors = darkFieldColors())
                 Text(repeatLabel(task.repeat) + " · " + (task.date ?: "No date"), color = Muted)
             }
         },
@@ -206,8 +219,8 @@ private fun SettingsDialog(onDismiss: () -> Unit, onSync: ((String) -> Unit) -> 
         title = { Text("Settings") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(url, { url = it }, label = { Text("Server address") })
-                OutlinedTextField(token, { token = it }, label = { Text("Token") })
+                OutlinedTextField(url, { url = it }, label = { Text("Server address") }, colors = darkFieldColors())
+                OutlinedTextField(token, { token = it }, label = { Text("Token") }, colors = darkFieldColors())
                 if (status.isNotBlank()) Text(status, color = Muted)
             }
         },
