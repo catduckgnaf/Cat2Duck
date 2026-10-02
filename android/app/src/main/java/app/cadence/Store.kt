@@ -54,12 +54,24 @@ object Store {
     fun sync(context: Context): String {
         val (url, token) = credentials(context)
         if (url.isBlank() || token.isBlank()) return "Add a server address and token first."
-        val remote = http(url, token, "GET", null)
-        val local = load(context)
-        val merged = Doc(mergeTasks(local.tasks, remote.tasks), mergeCategories(local.categories, remote.categories))
-        http(url, token, "PUT", merged.toJson())
-        save(context, merged)
-        return "Synced"
+        return try {
+            save(context, sync(url, token, load(context)))
+            "Synced"
+        } catch (error: Exception) {
+            "Saved on this device. Not synced: ${error.message ?: "server unavailable"}"
+        }
+    }
+
+    fun sync(base: String, token: String, local: Doc): Doc {
+        var current = local
+        repeat(3) { attempt ->
+            val remote = http(base, token, "GET", null, null)
+            current = Doc(mergeTasks(current.tasks, remote.doc.tasks), mergeCategories(current.categories, remote.doc.categories))
+            val saved = http(base, token, "PUT", current.toJson(), remote.revision)
+            if (saved.code == 200) return current
+            if (saved.code != 409 || attempt == 2) error(saved.text.ifBlank { "Server responded ${saved.code}" })
+        }
+        error("Server state kept changing")
     }
 
     private fun mergeTasks(local: List<Task>, remote: List<Task>): List<Task> {
@@ -82,13 +94,16 @@ object Store {
         return map.values.toList()
     }
 
-    private fun http(base: String, token: String, method: String, body: String?): Doc {
+    private data class Response(val code: Int, val revision: String, val text: String, val doc: Doc)
+
+    private fun http(base: String, token: String, method: String, body: String?, revision: String?): Response {
         val path = if (method == "GET" || method == "PUT") "/v1/state" else "/health"
         val conn = (URL(base.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 8000
             readTimeout = 8000
             setRequestProperty("Authorization", "Bearer $token")
+            if (revision != null) setRequestProperty("If-Match", revision)
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
@@ -97,8 +112,7 @@ object Store {
         }
         val code = conn.responseCode
         val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText().orEmpty()
-        if (code !in 200..299) error(text.ifBlank { "Server responded $code" })
-        if (method == "PUT") return Doc(emptyList(), emptyList())
-        return parseDoc(text)
+        val doc = if (method == "GET" && code in 200..299) parseDoc(text) else Doc(emptyList(), emptyList())
+        return Response(code, conn.getHeaderField("ETag").orEmpty(), text, doc)
     }
 }
