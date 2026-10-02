@@ -127,10 +127,19 @@ func TestBodyLimitAndCORSAndHeaders(t *testing.T) {
 		t.Fatalf("allowed CORS failed: %d %v", goodRes.StatusCode, goodRes.Header)
 	}
 
-	os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html><title>Cadence</title>"), 0o644)
+	os.WriteFile(filepath.Join(dir, "index.html"), []byte("home"), 0o644)
+	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0o644)
 	page, _ := http.Get(server.URL + "/")
-	if page.StatusCode != 200 || page.Header.Get("X-Content-Type-Options") != "nosniff" || page.Header.Get("Referrer-Policy") != "no-referrer" || !strings.Contains(page.Header.Get("Content-Security-Policy"), "default-src 'self'") {
+	if page.StatusCode != 200 || readBody(page) != "home" || page.Header.Get("X-Content-Type-Options") != "nosniff" || page.Header.Get("Referrer-Policy") != "no-referrer" || !strings.Contains(page.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Fatalf("security headers missing: %d %v", page.StatusCode, page.Header)
+	}
+	fallback, _ := http.Get(server.URL + "/missing")
+	if fallback.StatusCode != 200 || readBody(fallback) != "home" {
+		t.Fatalf("fallback status %d", fallback.StatusCode)
+	}
+	traversal, _ := http.NewRequest(http.MethodGet, server.URL+"/%2e%2e/secret.txt", nil)
+	if res, _ := http.DefaultClient.Do(traversal); res.StatusCode != 200 || readBody(res) != "home" {
+		t.Fatalf("encoded traversal status %d", res.StatusCode)
 	}
 }
 
@@ -198,4 +207,10 @@ func TestConcurrentAndRecovery(t *testing.T) {
 	if restored.Revision != 4 {
 		t.Fatal("primary was not restored")
 	}
+}
+
+func readBody(res *http.Response) string {
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	return string(raw)
 }

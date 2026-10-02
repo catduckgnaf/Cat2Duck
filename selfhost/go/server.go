@@ -10,6 +10,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -337,11 +338,11 @@ func (s *server) serveStatic(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func resolveStaticPath(root, requested string) (string, bool) {
-	decoded, err := path.Clean(requested), error(nil)
-	if strings.Contains(requested, "..") {
+	decoded, err := url.PathUnescape(requested)
+	if err != nil || strings.Contains(decoded, "..") {
 		return "", false
 	}
-	decoded = path.Clean("/" + requested)
+	decoded = path.Clean("/" + decoded)
 	if strings.Contains(decoded, "..") {
 		return "", false
 	}
