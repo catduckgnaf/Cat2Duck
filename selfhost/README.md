@@ -8,7 +8,7 @@ The Cat2Duck container serves the compiled Web UI and the `/v1/state` synchroniz
 * API clients send `Authorization: Bearer <token>`.
 * The browser stores the server address, but keeps the token only in the current in memory session. Disconnecting clears it without deleting local tasks.
 * Cross origin API calls are rejected unless their origin appears in `CADENCE_ALLOWED_ORIGINS`.
-* The container runs as the unprivileged `node` user and exposes a public `/health` endpoint.
+* The container runs as the unprivileged `cadence` user and exposes a public `/health` endpoint.
 * State updates require the current ETag in `If-Match`. Stale writers receive `409 Conflict` and clients pull, merge, and retry.
 
 Use TLS when exposing Cat2Duck beyond a trusted private network.
@@ -63,7 +63,7 @@ A missing revision returns `428 Precondition Required`. A stale revision returns
 
 ## Data and recovery
 
-The container stores state at `/data/state.json` and retains `/data/state.json.bak` as the last known good copy. Writes use a temporary file followed by an atomic rename. On startup, an invalid primary file is restored from the backup when possible.
+The container stores state at `/data/state.json` and retains `/data/state.json.bak` as the last known good copy. Writes use a temporary file followed by an atomic rename. On startup, an invalid primary file is restored from the backup when possible. The runtime server is a Go binary; the Node implementation remains in this directory as the behavioral reference and its tests remain part of `npm test`.
 
 Back up the entire mounted `/data` directory. To restore manually, stop the container, replace `state.json`, preserve valid JSON with `tasks` and `categories` arrays, then restart.
 

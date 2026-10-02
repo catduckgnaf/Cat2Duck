@@ -25,17 +25,21 @@ RUN node -e ' \
   }, 3000);'
 
 # Production runtime image
+FROM golang:1.22-alpine AS go-builder
+WORKDIR /src
+COPY selfhost/go/go.mod selfhost/go/*.go ./
+RUN CGO_ENABLED=0 go build -o /cat2duck-server .
+
 FROM node:22-alpine AS runner
 
 WORKDIR /app
 
-# Run as non-root node user for security
-RUN mkdir -p /data /app/static && chown -R node:node /data /app
+RUN adduser -D -u 1000 cadence && mkdir -p /data /app/static && chown -R cadence:cadence /data /app
 
-COPY selfhost/server.mjs selfhost/static-handler.mjs ./
+COPY --from=go-builder /cat2duck-server /app/cat2duck-server
 COPY --from=builder /app/.vercel/output/static /app/static
 
-USER node
+USER cadence
 
 ENV PORT=8787
 ENV DATA_PATH=/data/state.json
@@ -45,6 +49,6 @@ VOLUME /data
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD node -e 'require("node:http").get("http://localhost:8787/health", (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on("error", () => process.exit(1));'
+  CMD /app/cat2duck-server --healthcheck http://127.0.0.1:8787/health
 
-CMD ["node", "server.mjs"]
+CMD ["/app/cat2duck-server"]
