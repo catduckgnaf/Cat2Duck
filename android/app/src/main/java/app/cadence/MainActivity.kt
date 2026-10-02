@@ -4,7 +4,17 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -92,37 +102,39 @@ private fun CadenceApp() {
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Cadence", style = MaterialTheme.typography.headlineMedium, color = Ink)
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Cadence", style = MaterialTheme.typography.titleLarge, color = Ink)
             TextButton(onClick = { settings = true }) { Text("Settings") }
         }
-        Text("A repeat is one row. Check it and it moves to the next time.", color = Muted)
-        Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("feed", "today", "upcoming", "overdue", "later", "repeats", "done").forEach { id ->
                 Filter(id.replaceFirstChar { it.uppercase() }, view == id) { view = id }
             }
         }
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             items(visible, key = { it.id }) { task ->
-                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { commit(doc.copy(tasks = doc.tasks.map { if (it.id == task.id) advance(it) else it })) }) {
-                            Text(if (task.done) "Undo" else "Done")
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(task.title, color = Ink)
-                            val meta = listOfNotNull(names[task.categoryId], repeatLabel(task.repeat).takeIf { task.repeat.kind != "none" }, task.date ?: "No date")
-                            Text(meta.joinToString(" · "), color = Muted)
-                            if (task.notes.isNotBlank()) Text(task.notes.lineSequence().first(), color = Muted, maxLines = 1)
-                        }
-                        TextButton(onClick = { editing = task }) { Text("Details") }
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).clickable { editing = task }) {
+                        Text(task.title, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val meta = listOfNotNull(names[task.categoryId], repeatLabel(task.repeat).takeIf { task.repeat.kind != "none" }, task.date ?: "No date")
+                        Text(meta.joinToString(" · "), color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    IconButton(onClick = { commit(doc.copy(tasks = doc.tasks.map { if (it.id == task.id) advance(it) else it })) }) {
+                        Icon(Icons.Outlined.Check, contentDescription = if (task.done) "Undo ${task.title}" else "Complete ${task.title}", tint = Ink)
                     }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), label = { Text("Add a task") }, singleLine = true, colors = darkFieldColors())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                draft,
+                { draft = it },
+                modifier = Modifier.weight(1f).heightIn(max = 52.dp),
+                placeholder = { Text("Add a task", color = Muted) },
+                singleLine = true,
+                colors = darkFieldColors(),
+            )
             Button(onClick = {
                 val title = draft.trim()
                 if (title.isEmpty()) return@Button
@@ -174,8 +186,8 @@ private fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
     cursorColor = Ink,
     focusedLabelColor = Ink,
     unfocusedLabelColor = Muted,
-    focusedBorderColor = Ink,
-    unfocusedBorderColor = Muted,
+    focusedBorderColor = Muted,
+    unfocusedBorderColor = Color(0xFF5C574F),
 )
 
 @Composable
