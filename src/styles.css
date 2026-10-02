@@ -45,6 +45,15 @@
   textarea,
   select {
     font: inherit;
+    color: var(--color-ink);
+    caret-color: var(--color-ink);
+  }
+
+  input:-webkit-autofill,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-text-fill-color: var(--color-ink);
+    box-shadow: 0 0 0 1000px var(--color-card) inset;
   }
 
   h1,

@@ -325,12 +325,12 @@ function WeekStrip({
 
 function FeedColumns() {
   return (
-    <div className="sticky top-0 z-10 hidden border-b border-line bg-paper px-5 py-2 text-xs font-medium tracking-wide text-muted md:grid md:grid-cols-[2.75rem_minmax(0,1fr)_12rem_9rem_8rem] md:gap-3">
-      <span className="sr-only">Done</span>
+    <div className="sticky top-0 z-10 hidden border-b border-line bg-paper px-5 py-2 text-xs font-medium tracking-wide text-muted md:grid md:grid-cols-[minmax(0,1fr)_12rem_9rem_8rem_2.75rem] md:gap-3">
       <span>Task</span>
       <span>Due</span>
       <span>Category</span>
       <span>Repeats</span>
+      <span className="sr-only">Done</span>
     </div>
   );
 }
@@ -365,9 +365,14 @@ function TaskRow({
   const meta = [category, task.repeat.kind !== "none" ? repeatLabel(task.repeat, "short") : null].filter(Boolean).join(" · ");
 
   return (
-    <li className={`border-b border-line px-5 ${compact ? "py-1" : "py-3"}`}>
-      <div className={columns ? "md:grid md:grid-cols-[2.75rem_minmax(0,1fr)_12rem_9rem_8rem] md:items-center md:gap-3" : ""}>
-      <div className={columns ? "flex items-start gap-1 md:contents" : "flex items-start gap-1"}>
+    <li className={`border-b border-line px-5 ${compact ? "py-1" : "py-2"}`}>
+      <div className={columns ? "md:grid md:grid-cols-[minmax(0,1fr)_12rem_9rem_8rem_2.75rem] md:items-center md:gap-3" : ""}>
+      <div className={columns ? "flex items-center gap-2 md:contents" : "flex items-center gap-2"}>
+        <button type="button" className={`min-w-0 flex-1 text-left ${compact ? "py-1" : "py-2"}`} onClick={onOpen} aria-label={`Details for ${task.title}`}>
+          <span className={`block font-medium ${task.done ? "text-muted line-through" : "text-ink"}`}>{task.title}</span>
+          {meta && !columns ? <span className="mt-0.5 block truncate text-sm text-muted">{meta}{when ? ` · ${formatWhen(when, today)}` : ""}</span> : null}
+          {preview && !compact ? <span className="mt-1 block truncate text-sm text-pretty text-muted">{preview}</span> : null}
+        </button>
         <button
           type="button"
           role="checkbox"
@@ -376,12 +381,9 @@ function TaskRow({
           className={`grid shrink-0 place-items-center ${compact ? "size-9" : "size-11"}`}
           onClick={() => toggleTask(task.id)}
         >
-          <span className={`size-5 rounded-full border border-ink ${task.done ? "bg-ink" : "bg-transparent"}`} />
-        </button>
-        <button type="button" className={`min-w-0 flex-1 text-left ${compact ? "py-1" : "py-2"}`} onClick={onOpen} aria-label={`Details for ${task.title}`}>
-          <span className={`block font-medium ${task.done ? "text-muted line-through" : "text-ink"}`}>{task.title}</span>
-          {meta && !columns ? <span className="mt-0.5 block text-sm text-muted">{meta}</span> : null}
-          {preview && !compact ? <span className="mt-1 block truncate text-sm text-pretty text-muted">{preview}</span> : null}
+          <span className={`grid size-5 place-items-center rounded-full border border-ink text-xs text-paper ${task.done ? "bg-ink" : "bg-transparent"}`}>
+            {task.done ? "✓" : ""}
+          </span>
         </button>
       </div>
       {!task.done ? (
