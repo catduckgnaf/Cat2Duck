@@ -137,9 +137,11 @@ func TestBodyLimitAndCORSAndHeaders(t *testing.T) {
 	if fallback.StatusCode != 200 || readBody(fallback) != "home" {
 		t.Fatalf("fallback status %d", fallback.StatusCode)
 	}
-	traversal, _ := http.NewRequest(http.MethodGet, server.URL+"/%2e%2e/secret.txt", nil)
-	if res, _ := http.DefaultClient.Do(traversal); res.StatusCode != 200 || readBody(res) != "home" {
-		t.Fatalf("encoded traversal status %d", res.StatusCode)
+	direct := httptest.NewRequest(http.MethodGet, "/%2e%2e/secret.txt", nil)
+	recorder := httptest.NewRecorder()
+	server.Config.Handler.ServeHTTP(recorder, direct)
+	if recorder.Code != 200 || recorder.Body.String() != "home" {
+		t.Fatalf("encoded traversal status %d", recorder.Code)
 	}
 }
 
