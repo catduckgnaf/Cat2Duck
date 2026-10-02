@@ -140,8 +140,11 @@ func TestBodyLimitAndCORSAndHeaders(t *testing.T) {
 	direct := httptest.NewRequest(http.MethodGet, "/%2e%2e/secret.txt", nil)
 	recorder := httptest.NewRecorder()
 	server.Config.Handler.ServeHTTP(recorder, direct)
-	if recorder.Code != 200 || recorder.Body.String() != "home" {
-		t.Fatalf("encoded traversal status %d", recorder.Code)
+	if recorder.Code != 400 || recorder.Body.String() != "invalid URL path\n" {
+		t.Fatalf("encoded traversal status %d body %q", recorder.Code, recorder.Body.String())
+	}
+	if resolved, ok := resolveStaticPath(dir, "/%2e%2e/secret.txt"); ok || strings.Contains(resolved, "secret.txt") {
+		t.Fatalf("resolver accepted encoded traversal: %q", resolved)
 	}
 }
 
