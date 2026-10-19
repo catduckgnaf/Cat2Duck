@@ -169,7 +169,11 @@ export const useCadence = create<State>()(
         const now = nowIso();
         const { advanced, ...fields } = completionPatch(task, today, now);
         const text =
-          advanced && fields.date ? `Next is ${formatWhen(fields.date, today)}` : fields.done ? "Completed" : "Restored";
+          advanced && fields.date
+            ? `Moved repeating task to ${formatWhen(fields.date, today)}`
+            : fields.done
+              ? "Completed"
+              : "Restored";
         set({
           tasks: prev.tasks.map((item) => (item.id === id ? { ...item, ...fields, updatedAt: now } : item)),
           notice: noticeOf(text, prev.tasks, prev.categories),
