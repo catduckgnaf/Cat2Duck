@@ -399,9 +399,14 @@ function TaskRow({
               <ChevronLeft className="size-5" />
             </button>
           )}
-          <span className={`min-w-0 flex-1 text-sm tabular-nums text-muted ${when && when < today ? "text-danger" : ""} ${compact ? "text-left" : "text-center"}`}>
+          <button
+            type="button"
+            className={`min-w-0 flex-1 text-sm tabular-nums text-muted underline-offset-2 hover:underline ${when && when < today ? "text-danger" : ""} ${compact ? "text-left" : "text-center"}`}
+            onClick={() => setMoveOpen(true)}
+            aria-label={when ? `Change date from ${formatWhen(when, today)}` : "Set a date"}
+          >
             {when ? formatWhen(when, today) : "No date"}
-          </span>
+          </button>
           {compact ? null : (
             <button
               type="button"
@@ -413,7 +418,7 @@ function TaskRow({
             </button>
           )}
           <Button variant="quiet" onClick={() => setMoveOpen(true)}>
-            Move
+            Pick date
           </Button>
         </div>
       ) : columns ? (
