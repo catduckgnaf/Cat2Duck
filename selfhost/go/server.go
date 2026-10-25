@@ -22,8 +22,11 @@ import (
 
 const defaultMaxBody = 1_500_000
 
+// 'unsafe-inline' in script-src is required: the built Web UI's index.html
+// carries first-party inline bootstrap scripts (TanStack Start hydration).
+// Without it the served app renders blank. Keep in sync with server.mjs.
 var securityHeaders = map[string]string{
-	"Content-Security-Policy": "default-src 'self'; script-src 'self' https://grok.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' https://grok.com",
+	"Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://grok.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' https://grok.com",
 	"Referrer-Policy":         "no-referrer",
 	"X-Content-Type-Options":  "nosniff",
 }

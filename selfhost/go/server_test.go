@@ -130,7 +130,7 @@ func TestBodyLimitAndCORSAndHeaders(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "index.html"), []byte("home"), 0o644)
 	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0o644)
 	page, _ := http.Get(server.URL + "/")
-	if page.StatusCode != 200 || readBody(page) != "home" || page.Header.Get("X-Content-Type-Options") != "nosniff" || page.Header.Get("Referrer-Policy") != "no-referrer" || !strings.Contains(page.Header.Get("Content-Security-Policy"), "default-src 'self'") {
+	if page.StatusCode != 200 || readBody(page) != "home" || page.Header.Get("X-Content-Type-Options") != "nosniff" || page.Header.Get("Referrer-Policy") != "no-referrer" || !strings.Contains(page.Header.Get("Content-Security-Policy"), "default-src 'self'") || !strings.Contains(page.Header.Get("Content-Security-Policy"), "script-src 'self' 'unsafe-inline'") {
 		t.Fatalf("security headers missing: %d %v", page.StatusCode, page.Header)
 	}
 	fallback, _ := http.Get(server.URL + "/missing")

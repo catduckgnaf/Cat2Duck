@@ -105,6 +105,7 @@ test("security headers are returned for web responses", async () => {
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
     assert.equal(response.headers.get("referrer-policy"), "no-referrer");
     assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+    assert.match(response.headers.get("content-security-policy") ?? "", /script-src 'self' 'unsafe-inline'/);
   });
 });
 
