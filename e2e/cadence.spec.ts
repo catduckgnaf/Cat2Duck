@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "playwright/test";
@@ -7,7 +7,10 @@ import { expect, test } from "playwright/test";
 const title = "QA task that survives the feed";
 const token = "qa-token-that-is-longer-than-thirty-two-characters";
 
-async function startSyncServer(port: number): Promise<{ child: ChildProcess; directory: string }> {
+async function startSyncServer(
+  port: number,
+  staticDir: string = join(process.cwd(), ".vercel/output/static"),
+): Promise<{ child: ChildProcess; directory: string }> {
   const directory = await mkdtemp(join(tmpdir(), "cat2duck-e2e-"));
   const processEnv = { ...process.env };
   delete processEnv.HTTP_PROXY;
@@ -21,7 +24,7 @@ async function startSyncServer(port: number): Promise<{ child: ChildProcess; dir
       CADENCE_ALLOWED_ORIGINS: "http://127.0.0.1:4173,http://127.0.0.1:8080",
       DATA_PATH: join(directory, "state.json"),
       PORT: String(port),
-      STATIC_DIR: join(process.cwd(), ".vercel/output/static"),
+      STATIC_DIR: staticDir,
     },
     stdio: "ignore",
   });
@@ -163,4 +166,33 @@ test("add, edit, complete, repeat, filter, export, import, settings, and compose
   const screenshot = `docs/qa/screenshots/${testInfo.project.name}.png`;
   await page.screenshot({ path: screenshot, fullPage: true });
   expect(browserErrors).toEqual([]);
+});
+
+test("self-host server serves a page whose inline scripts run", async ({ page }, testInfo) => {
+  // Regression: the self-host server's Content-Security-Policy must not block
+  // the inline bootstrap scripts in the Web UI it serves, or the deployed app
+  // renders blank even though the API works. The main flow test cannot catch
+  // this - it loads the UI from the Vite dev server, not the self-host server.
+  const staticDir = await mkdtemp(join(tmpdir(), "cat2duck-e2e-static-"));
+  await writeFile(
+    join(staticDir, "index.html"),
+    '<!doctype html><title>selfhost</title><p id="app">waiting</p>' +
+      '<script>document.getElementById("app").textContent = "inline script ran";</script>',
+  );
+  const port = 18793 + testInfo.workerIndex;
+  const server = await startSyncServer(port, staticDir);
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  try {
+    await page.goto(`http://127.0.0.1:${port}/`);
+    await expect(page.getByText("inline script ran")).toBeVisible();
+    expect(consoleErrors.filter((text) => text.includes("Content Security Policy"))).toEqual([]);
+  } finally {
+    server.child.kill();
+    await rm(server.directory, { recursive: true, force: true });
+    await rm(staticDir, { recursive: true, force: true });
+  }
 });

@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 import { contentTypeFor, resolveStaticPath } from "./static-handler.mjs";
 
 const DEFAULT_MAX_BODY = 1_500_000;
+// 'unsafe-inline' in script-src is required: the built Web UI's index.html
+// carries first-party inline bootstrap scripts (TanStack Start hydration).
+// Without it the served app renders blank. All scripts are own build output.
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
-    "default-src 'self'; script-src 'self' https://grok.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' https://grok.com",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://grok.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' https://grok.com",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
 };
