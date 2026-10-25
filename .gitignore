@@ -5,8 +5,7 @@ node_modules/
 .env.*
 .vercel/
 dist/
-.grok/preview.log
-.grok/preview.pid
+.preview/
 screenshots/dev-smoke.png
 docs/qa/test-results/
 playwright-report/
