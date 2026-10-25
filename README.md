@@ -46,6 +46,8 @@ docker compose -f selfhost/docker-compose.yml up --build -d
 
 Open `http://localhost:8793`. The host address and port can be changed with `CAT2DUCK_BIND` and `CAT2DUCK_PORT`.
 
+A prebuilt image is published to `ghcr.io/catduckgnaf/cat2duck` (amd64 and arm64); `docker compose -f selfhost/docker-compose.yml pull` uses it instead of building locally.
+
 See [the self hosting guide](selfhost/README.md) for authentication, CORS, backups, API behavior, Docker, and Unraid instructions.
 
 ## Android

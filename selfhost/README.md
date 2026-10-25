@@ -2,6 +2,23 @@
 
 The Cat2Duck container serves the compiled Web UI and the `/v1/state` synchronization API from one origin.
 
+## Prebuilt image
+
+CI publishes the container to the GitHub Container Registry on every push to
+`main` (tag `latest` plus the short commit SHA) and on every `v*` release tag
+(tagged with the version), for both `linux/amd64` and `linux/arm64`:
+
+```sh
+docker pull ghcr.io/catduckgnaf/cat2duck:latest
+```
+
+With Compose, `docker compose -f selfhost/docker-compose.yml pull` fetches
+that image instead of building; `up --build` still builds locally. On Unraid,
+the image name `ghcr.io/catduckgnaf/cat2duck:latest` can be used directly as
+the repository. If a pull is denied right after the first publish, open the
+package settings on GitHub and make the package public (or link it to this
+repository) — first-time GHCR packages are not always public by default.
+
 ## Security model
 
 * `CADENCE_TOKEN` is required and must contain at least 32 characters. Startup fails without it.

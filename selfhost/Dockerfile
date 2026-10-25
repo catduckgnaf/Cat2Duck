@@ -34,7 +34,9 @@ FROM node:22-alpine AS runner
 
 WORKDIR /app
 
-RUN adduser -D -u 1000 cadence && mkdir -p /data /app/static && chown -R cadence:cadence /data /app
+# No explicit UID: the node base image already owns UID 1000 (user "node"),
+# so `adduser -u 1000` fails with "uid '1000' in use".
+RUN adduser -D cadence && mkdir -p /data /app/static && chown -R cadence:cadence /data /app
 
 COPY --from=go-builder /cat2duck-server /app/cat2duck-server
 COPY --from=builder /app/.vercel/output/static /app/static
