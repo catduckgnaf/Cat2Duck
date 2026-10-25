@@ -3,7 +3,7 @@
  * Brand-asset gate shared by browser-smoke.mjs (and unit-testable without a
  * browser): a canvas app is almost always a game / visually rich app, and
  * those must ship a custom share card — the default og.grok.me placeholder is
- * not acceptable for them (see .grok/skills/og/SKILL.md).
+ * not acceptable for them.
  *
  * Games must also set type=x:game in src/lib/og/site.json so the platform
  * injector emits og:type for X game-card unfurls, and public/x-banner.jpg for
@@ -38,7 +38,7 @@ import { OG_SITE_REL_PATH, readOgSite, siteHasCustomCard } from "./grok-pwa-shar
 export const MAX_CARD_BYTES = 600 * 1024;
 
 // Written by the brand task while it generates, removed when it finishes.
-export const OG_PENDING_REL_PATH = ".grok/og-pending";
+export const OG_PENDING_REL_PATH = ".preview/og-pending";
 // A Stop mid-generation leaves the marker behind, so the demotion expires
 // instead of hiding a missing card forever on that workspace.
 export const OG_PENDING_MAX_AGE_MS = 10 * 60 * 1000;
@@ -85,7 +85,6 @@ function brandWarningsOnDisk({
   workspaceRoot = "/workspace",
   cardRequired = false,
 }) {
-  const skillPath = join(workspaceRoot, ".grok/skills/og/SKILL.md");
   const sitePath = join(workspaceRoot, OG_SITE_REL_PATH);
   const site = readOgSite(workspaceRoot);
   const cardPath = [
@@ -99,14 +98,14 @@ function brandWarningsOnDisk({
       warnings.push(
         `BRAND WARNING: ${cardPath} is over 600 KB — link scrapers (X card previews included) `
           + "time out or skip images this heavy, so the card silently fails to unfurl. "
-          + `Re-encode as JPEG (public/og.jpg, ffmpeg -q:v 4) per ${skillPath}.`,
+          + `Re-encode as JPEG (public/og.jpg, ffmpeg -q:v 4).`,
       );
     }
     if (!siteHasCustomCard(site)) {
       warnings.push(
         `BRAND WARNING: ${cardPath} exists but ${sitePath} is missing "card": "custom". `
           + "Bake infers custom from the file, but set the flag in "
-          + `${sitePath} per ${skillPath} so identity is explicit.`,
+          + `${sitePath} so identity is explicit.`,
       );
     }
   } else if (hasCanvas) {
@@ -114,14 +113,14 @@ function brandWarningsOnDisk({
       `BRAND WARNING: this looks like a game/canvas app but ${workspaceRoot}/public/og.jpg `
         + "is missing. Games and visually rich apps must ship a custom 1200x630 share card "
         + "built from the app's own art — the default og.grok.me placeholder card is not "
-        + `acceptable for them. You are not done: open ${skillPath} and finish the `
+        + `acceptable for them. You are not done: finish the `
         + "brand-asset pass.",
     );
   } else if (cardRequired) {
     warnings.push(
       `BRAND WARNING: ${workspaceRoot}/public/og.jpg is missing and this pass exists to `
         + "produce it. Generate the 1200x630 card from the app's own art and hand it over "
-        + `per ${skillPath}. If no image-generation tool is available in this session, `
+        + `If no image-generation tool is available in this session, `
         + "report that instead of reporting a pass — the app keeps the og.grok.me "
         + "placeholder.",
     );
@@ -131,7 +130,7 @@ function brandWarningsOnDisk({
         + "Custom cards are the default for games of every kind (DOM board/word games included), "
         + "whimsical apps, creative tools, and brand-forward pages — only plain utilities "
         + "(converters, CRUD trackers, admin dashboards) keep the placeholder. If this app "
-        + `is not a plain utility, finish the brand-asset pass per ${skillPath}.`,
+        + `is not a plain utility, finish the brand-asset pass.`,
     );
   }
 
@@ -139,7 +138,7 @@ function brandWarningsOnDisk({
     warnings.push(
       'BRAND WARNING: this looks like a game/canvas app but src/lib/og/site.json is missing '
         + '"type": "x:game". X uses og:type=x:game to present the unfurl as a game card — set '
-        + `it in ${sitePath} per ${skillPath}. Do not invent `
+        + `it in ${sitePath}. Do not invent `
         + "x:type or overload twitter:card as the game signal.",
     );
   }
@@ -152,13 +151,13 @@ function brandWarningsOnDisk({
       warnings.push(
         `BRAND WARNING: this looks like a game/canvas app but ${bannerPath} is missing. `
           + "Games need a 50:11 X feed card (1200×264 JPEG) at public/x-banner.jpg — "
-          + `open ${skillPath} and finish the brand-asset pass.`,
+          + `finish the brand-asset pass.`,
       );
     } else if (statSync(bannerPath).size > MAX_CARD_BYTES) {
       warnings.push(
         `BRAND WARNING: ${bannerPath} is over 600 KB — link scrapers (X card previews `
           + "included) time out or skip images this heavy, so the feed card silently fails "
-          + `to unfurl. Re-encode as JPEG (ffmpeg -q:v 4) per ${skillPath}.`,
+          + `to unfurl. Re-encode as JPEG (ffmpeg -q:v 4).`,
       );
     }
   }
