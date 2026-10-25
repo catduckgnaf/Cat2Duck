@@ -1,5 +1,6 @@
 services:
   cadence:
+    image: ghcr.io/catduckgnaf/cat2duck:latest
     build:
       context: ..
       dockerfile: selfhost/Dockerfile
