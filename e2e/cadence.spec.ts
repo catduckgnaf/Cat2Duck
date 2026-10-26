@@ -168,6 +168,49 @@ test("add, edit, complete, repeat, filter, export, import, settings, and compose
   expect(browserErrors).toEqual([]);
 });
 
+test("row controls: one-click date picker, category picker, and repeat checkbox advancing", async ({ page }) => {
+  const key = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
+  const inFiveDays = key(new Date(Date.now() + 5 * 86_400_000));
+  const tomorrow = key(new Date(Date.now() + 86_400_000));
+
+  // The date on the row is the picker: fill it and the task moves, no dialog.
+  await page.getByLabel("New task").fill("Quick date task");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  const quickRow = page.getByRole("listitem").filter({ hasText: "Quick date task" });
+  await expect(quickRow).toBeVisible();
+  const dateInput = quickRow.getByLabel(/Change date for Quick date task/);
+  await dateInput.fill(inFiveDays);
+  await expect(dateInput).toHaveValue(inFiveDays);
+  await expect(page.getByText(/Moved to/)).toBeVisible();
+
+  // The category can be set from the row, without opening the details.
+  await quickRow.locator('button[aria-label^="Change category"]:visible').click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Home", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(quickRow).toContainText("Home");
+
+  // Checking off a repeating task moves it to its next date; it is not "done".
+  await page.getByLabel("New task").fill("Daily quick task");
+  await page.getByRole("button", { name: "Once" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Every day" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  const dailyRow = page.getByRole("listitem").filter({ hasText: "Daily quick task" });
+  await expect(dailyRow).toBeVisible();
+  await dailyRow.getByRole("checkbox", { name: /Done\. Move Daily quick task/ }).click();
+  await expect(page.getByText("Moved repeating task to Tomorrow")).toBeVisible();
+  await expect(dailyRow.getByLabel(/Change date for Daily quick task/)).toHaveValue(tomorrow);
+  await page.getByRole("button", { name: /^Done/ }).click();
+  await expect(page.getByText("Daily quick task", { exact: true })).toHaveCount(0);
+});
+
 test("self-host server serves a page whose inline scripts run", async ({ page }, testInfo) => {
   // Regression: the self-host server's Content-Security-Policy must not block
   // the inline bootstrap scripts in the Web UI it serves, or the deployed app
