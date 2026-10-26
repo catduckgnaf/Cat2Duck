@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import { Detail } from "@/components/cadence/detail";
 import { CategoriesDialog, SettingsDialog } from "@/components/cadence/settings";
-import { Button, Chip, DateChooser, Modal, RepeatChooser } from "@/components/cadence/ui";
+import { Button, CategoryPicker, Chip, DateChooser, Modal, RepeatChooser } from "@/components/cadence/ui";
 import {
   activeCategories,
   addDays,
@@ -325,7 +325,7 @@ function WeekStrip({
 
 function FeedColumns() {
   return (
-    <div className="sticky top-0 z-10 hidden border-b border-line bg-paper px-5 py-2 text-xs font-medium tracking-wide text-muted md:grid md:grid-cols-[minmax(0,1fr)_12rem_9rem_8rem_2.75rem] md:gap-3">
+    <div className="sticky top-0 z-10 hidden border-b border-line bg-paper px-5 py-2 text-xs font-medium tracking-wide text-muted md:grid md:grid-cols-[minmax(0,1fr)_14rem_9rem_8rem_2.75rem] md:gap-3">
       <span>Task</span>
       <span>Due</span>
       <span>Category</span>
@@ -359,14 +359,17 @@ function TaskRow({
 }) {
   const moveTask = useCadence((s) => s.moveTask);
   const toggleTask = useCadence((s) => s.toggleTask);
-  const [moveOpen, setMoveOpen] = useState(false);
+  const updateTask = useCadence((s) => s.updateTask);
+  const addCategory = useCadence((s) => s.addCategory);
+  const allCategories = useCadence((s) => s.categories);
+  const [categoryOpen, setCategoryOpen] = useState(false);
   const when = shownDate(task, today);
   const preview = notePreview(task.notes);
   const meta = [category, task.repeat.kind !== "none" ? repeatLabel(task.repeat, "short") : null].filter(Boolean).join(" · ");
 
   return (
     <li className={`border-b border-line px-5 ${compact ? "py-1" : "py-2"}`}>
-      <div className={columns ? "md:grid md:grid-cols-[minmax(0,1fr)_12rem_9rem_8rem_2.75rem] md:items-center md:gap-3" : ""}>
+      <div className={columns ? "md:grid md:grid-cols-[minmax(0,1fr)_14rem_9rem_8rem_2.75rem] md:items-center md:gap-3" : ""}>
       <div className={columns ? "flex items-center gap-2 md:contents" : "flex items-center gap-2"}>
         <button type="button" className={`min-w-0 flex-1 text-left ${compact ? "py-1" : "py-2"}`} onClick={onOpen} aria-label={`Details for ${task.title}`}>
           <span className={`block font-medium ${task.done ? "text-muted line-through" : "text-ink"}`}>{task.title}</span>
@@ -399,14 +402,28 @@ function TaskRow({
               <ChevronLeft className="size-5" />
             </button>
           )}
-          <button
-            type="button"
-            className={`min-w-0 flex-1 text-sm tabular-nums text-muted underline-offset-2 hover:underline ${when && when < today ? "text-danger" : ""} ${compact ? "text-left" : "text-center"}`}
-            onClick={() => setMoveOpen(true)}
-            aria-label={when ? `Change date from ${formatWhen(when, today)}` : "Set a date"}
-          >
-            {when ? formatWhen(when, today) : "No date"}
-          </button>
+          <div className="relative min-w-0 flex-1">
+            <span
+              aria-hidden="true"
+              className={`pointer-events-none block min-h-11 truncate py-3 text-sm tabular-nums text-muted underline-offset-2 ${when && when < today ? "text-danger" : ""} ${compact ? "text-left" : "text-center"}`}
+            >
+              {when ? formatWhen(when, today) : "No date"}
+            </span>
+            <input
+              type="date"
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              aria-label={when ? `Change date for ${task.title}, currently ${formatWhen(when, today)}` : `Set a date for ${task.title}`}
+              value={when ?? ""}
+              onClick={(event) => {
+                try {
+                  event.currentTarget.showPicker();
+                } catch {
+                  // Some browsers already open the picker from the click itself.
+                }
+              }}
+              onChange={(event) => moveTask(task.id, event.target.value || null)}
+            />
+          </div>
           {compact ? null : (
             <button
               type="button"
@@ -417,8 +434,13 @@ function TaskRow({
               <ChevronRight className="size-5" />
             </button>
           )}
-          <Button variant="quiet" onClick={() => setMoveOpen(true)}>
-            Pick date
+          <Button
+            variant="quiet"
+            className={`max-w-32 shrink-0 ${columns ? "md:hidden" : ""}`}
+            onClick={() => setCategoryOpen(true)}
+            aria-label={`Change category for ${task.title}`}
+          >
+            <span className="truncate">{category ?? "Category"}</span>
           </Button>
         </div>
       ) : columns ? (
@@ -426,31 +448,32 @@ function TaskRow({
       ) : null}
       {columns ? (
         <>
-          <span className="mt-1 hidden items-center gap-2 text-sm text-muted md:mt-0 md:flex">
+          <button
+            type="button"
+            onClick={() => setCategoryOpen(true)}
+            aria-label={`Change category for ${task.title}`}
+            className="mt-1 hidden items-center gap-2 text-left text-sm text-muted underline-offset-2 hover:underline md:mt-0 md:flex"
+          >
             <span className="size-2 shrink-0 rounded-full" style={{ background: category ? categoryTone(category) : "#3f3b35" }} />
-            {category ?? "None"}
-          </span>
+            <span className="truncate">{category ?? "None"}</span>
+          </button>
           <span className="hidden text-sm text-muted md:block">{task.repeat.kind === "none" ? "Once" : repeatLabel(task.repeat, "short")}</span>
         </>
       ) : null}
       </div>
-      {moveOpen ? (
-        <Modal
-          open
-          onOpenChange={setMoveOpen}
-          title="Move"
-          description={
-            task.repeat.kind === "none"
-              ? task.title
-              : `${task.title}. Only this next time is shown. Moving it changes where that one sits.`
-          }
-        >
-          <DateChooser
-            date={when}
-            calendarDefaultOpen
-            onChange={(date) => {
-              moveTask(task.id, date);
-              setMoveOpen(false);
+      {categoryOpen ? (
+        <Modal open onOpenChange={setCategoryOpen} title="Category" description={task.title}>
+          <CategoryPicker
+            categoryId={task.categoryId}
+            categories={activeCategories(allCategories)}
+            onChange={(id) => {
+              updateTask(task.id, { categoryId: id });
+              setCategoryOpen(false);
+            }}
+            onCreate={(name) => {
+              const id = addCategory(name);
+              if (id) updateTask(task.id, { categoryId: id });
+              setCategoryOpen(false);
             }}
           />
         </Modal>

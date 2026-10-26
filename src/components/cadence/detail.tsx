@@ -142,6 +142,7 @@ function DetailBody({ task, categories, onClose }: { task: Task; categories: Cat
         <div className="mt-2">
           <DateChooser
             date={date}
+            calendarDefaultOpen
             onChange={(next) => {
               dateTouched.current = true;
               const todayNow = todayKey();
