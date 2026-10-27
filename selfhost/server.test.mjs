@@ -380,6 +380,121 @@ test("a user PUT preserves other users' tasks exactly, and a deleted user loses 
   });
 });
 
+async function rest(url, token, method, path, body) {
+  return fetch(`${url}${path}`, {
+    method,
+    headers: { ...(token ? bearer(token) : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    body: body !== undefined ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined,
+  });
+}
+
+test("REST task API: admin create, list, patch done, delete happy path", async () => {
+  await withServer(async ({ url }) => {
+    const created = await rest(url, TOKEN, "POST", "/v1/tasks", { title: "Water the plants", date: "2026-10-01", notes: "Balcony too" });
+    assert.equal(created.status, 201);
+    const task = await created.json();
+    assert.ok(task.id);
+    assert.equal(task.title, "Water the plants");
+    assert.equal(task.notes, "Balcony too");
+    assert.equal(task.date, "2026-10-01");
+    assert.deepEqual(task.repeat, { kind: "none" });
+    assert.equal(task.done, false);
+    assert.equal(task.completedAt, null);
+    assert.equal(task.ownerId, null);
+    assert.deepEqual(task.sharedWith, []);
+    assert.ok(task.createdAt && task.createdAt === task.updatedAt);
+
+    const listed = await (await rest(url, TOKEN, "GET", "/v1/tasks")).json();
+    assert.deepEqual(listed.tasks.map((t) => t.id), [task.id]);
+
+    const patched = await rest(url, TOKEN, "PATCH", `/v1/tasks/${task.id}`, { done: true });
+    assert.equal(patched.status, 200);
+    const doneTask = await patched.json();
+    assert.equal(doneTask.done, true);
+    assert.ok(doneTask.completedAt);
+    // A completed task is still listed (only deleted ones are hidden).
+    assert.equal((await (await rest(url, TOKEN, "GET", "/v1/tasks")).json()).tasks.length, 1);
+
+    const reopened = await (await rest(url, TOKEN, "PATCH", `/v1/tasks/${task.id}`, { done: false, title: "Water the plants!" })).json();
+    assert.equal(reopened.done, false);
+    assert.equal(reopened.completedAt, null);
+    assert.equal(reopened.title, "Water the plants!");
+
+    const deleted = await rest(url, TOKEN, "DELETE", `/v1/tasks/${task.id}`);
+    assert.equal(deleted.status, 200);
+    assert.equal((await deleted.json()).deleted, true);
+    assert.deepEqual((await (await rest(url, TOKEN, "GET", "/v1/tasks")).json()).tasks, []);
+    // The tombstone is in the stored state, like a client delete.
+    const stateView = await getState(url, TOKEN);
+    assert.equal(stateView.body.tasks.find((t) => t.id === task.id).deleted, true);
+    assert.equal((await rest(url, TOKEN, "PATCH", `/v1/tasks/${task.id}`, { done: true })).status, 404);
+    assert.equal((await rest(url, TOKEN, "DELETE", `/v1/tasks/${task.id}`)).status, 404);
+  });
+});
+
+test("REST task API: auth failures are 401 and bad bodies are 400", async () => {
+  await withServer(async ({ url }) => {
+    assert.equal((await rest(url, null, "GET", "/v1/tasks")).status, 401);
+    assert.equal((await rest(url, "wrong-token", "GET", "/v1/tasks")).status, 401);
+    assert.equal((await rest(url, null, "POST", "/v1/tasks", { title: "x" })).status, 401);
+    assert.equal((await rest(url, TOKEN, "POST", "/v1/tasks", "{not json")).status, 400);
+    assert.equal((await rest(url, TOKEN, "POST", "/v1/tasks", {})).status, 400);
+    assert.equal((await rest(url, TOKEN, "POST", "/v1/tasks", { title: "   " })).status, 400);
+    assert.equal((await rest(url, TOKEN, "POST", "/v1/tasks", { title: "x", date: "01/10/2026" })).status, 400);
+    assert.equal((await rest(url, TOKEN, "POST", "/v1/tasks", { title: "x", repeat: { kind: "hourly" } })).status, 400);
+    const created = await (await rest(url, TOKEN, "POST", "/v1/tasks", { title: "Real" })).json();
+    assert.equal((await rest(url, TOKEN, "PATCH", `/v1/tasks/${created.id}`, "{nope")).status, 400);
+    assert.equal((await rest(url, TOKEN, "PATCH", `/v1/tasks/${created.id}`, { done: "yes" })).status, 400);
+    assert.equal((await rest(url, TOKEN, "PATCH", "/v1/tasks/does-not-exist", { done: true })).status, 404);
+    assert.equal((await rest(url, TOKEN, "DELETE", "/v1/tasks/does-not-exist")).status, 404);
+  });
+});
+
+test("REST task API: user tokens are scoped; shared tasks patch but do not delete", async () => {
+  await withServer(async ({ url }) => {
+    const alice = await createUser(url, "Alice");
+    const bob = await createUser(url, "Bob");
+
+    // Alice creates through REST: the task is stamped as hers.
+    const aliceCreated = await rest(url, alice.token, "POST", "/v1/tasks", { title: "Alice toduck" });
+    assert.equal(aliceCreated.status, 201);
+    const aliceTask = await aliceCreated.json();
+    assert.equal(aliceTask.ownerId, alice.id);
+
+    // Bob creates his own; neither can see the other's in the REST list.
+    const bobTask = await (await rest(url, bob.token, "POST", "/v1/tasks", { title: "Bob toduck" })).json();
+    assert.deepEqual((await (await rest(url, alice.token, "GET", "/v1/tasks")).json()).tasks.map((t) => t.id), [aliceTask.id]);
+    assert.deepEqual((await (await rest(url, bob.token, "GET", "/v1/tasks")).json()).tasks.map((t) => t.id), [bobTask.id]);
+    assert.equal((await rest(url, bob.token, "PATCH", `/v1/tasks/${aliceTask.id}`, { done: true })).status, 404);
+    assert.equal((await rest(url, bob.token, "DELETE", `/v1/tasks/${aliceTask.id}`)).status, 404);
+
+    // Alice shares her task with Bob through scoped sync.
+    const aliceView = await getState(url, alice.token);
+    const shareRes = await putState(url, alice.token, aliceView.revision, {
+      tasks: [{ ...aliceTask, sharedWith: [bob.id] }],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(shareRes.status, 200);
+
+    // Bob now lists it and can patch it (editable by both)…
+    assert.deepEqual((await (await rest(url, bob.token, "GET", "/v1/tasks")).json()).tasks.map((t) => t.id).sort(), [aliceTask.id, bobTask.id].sort());
+    const bobPatch = await rest(url, bob.token, "PATCH", `/v1/tasks/${aliceTask.id}`, { done: true });
+    assert.equal(bobPatch.status, 200);
+    assert.equal((await bobPatch.json()).done, true);
+    // …but cannot delete it, and cannot forge ownership through PATCH.
+    assert.equal((await rest(url, bob.token, "DELETE", `/v1/tasks/${aliceTask.id}`)).status, 403);
+    const forge = await (await rest(url, bob.token, "PATCH", `/v1/tasks/${aliceTask.id}`, { title: "Still Alice's" })).json();
+    assert.equal(forge.ownerId, alice.id);
+    assert.deepEqual(forge.sharedWith, [bob.id]);
+
+    // The admin sees all of it; Alice (owner) can delete her task.
+    assert.equal((await (await rest(url, TOKEN, "GET", "/v1/tasks")).json()).tasks.length, 2);
+    assert.equal((await rest(url, alice.token, "DELETE", `/v1/tasks/${aliceTask.id}`)).status, 200);
+    assert.deepEqual((await (await rest(url, bob.token, "GET", "/v1/tasks")).json()).tasks.map((t) => t.id), [bobTask.id]);
+  });
+});
+
 test("projects round-trip, and payloads without projects still work and do not wipe them", async () => {
   await withServer(async ({ url }) => {
     const project = { id: "p1", name: "House", createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" };
