@@ -33,12 +33,14 @@ function resetState() {
   useCadence.setState({
     tasks: [],
     categories: [],
+    projects: [],
     seeded: true,
     hasHydrated: true,
     view: "feed",
     focusDate: "2026-09-28",
     query: "",
     categoryFilter: null,
+    projectFilter: null,
     showRepeating: true,
     compact: false,
     serverUrl: "",
@@ -56,6 +58,7 @@ test("disconnect clears browser credentials without deleting local tasks", () =>
     title: "Keep me",
     notes: "",
     categoryId: null,
+    projectId: null,
     date: "2026-09-28",
     repeat: { kind: "none" },
   });
@@ -117,6 +120,7 @@ test("concurrent local edits while sync is in flight are preserved", async () =>
       title: "Concurrent local task",
       notes: "must not be wiped",
       categoryId: null,
+      projectId: null,
       date: "2026-09-28",
       repeat: { kind: "none" },
     });
@@ -147,4 +151,67 @@ test("failed synchronization records an actionable connection error", async () =
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("projects mirror categories: create, dedupe, rename, assign, delete clears tasks", () => {
+  resetState();
+  const state = () => useCadence.getState();
+  const id = state().addProject("House");
+  assert.ok(id);
+  assert.equal(state().addProject("house"), id);
+  assert.equal(state().addProject("  "), null);
+  state().renameProject(id!, "Home base");
+  assert.equal(state().projects.find((p) => p.id === id)?.name, "Home base");
+
+  state().addTask({
+    title: "In a project",
+    notes: "",
+    categoryId: null,
+    projectId: id,
+    date: "2026-09-28",
+    repeat: { kind: "none" },
+  });
+  assert.equal(state().tasks[0]?.projectId, id);
+
+  // The assignment survives the persisted (partialized) shape.
+  const options = useCadence.persist.getOptions();
+  const persisted = options.partialize?.(state()) as { tasks: Array<{ projectId: string | null }>; projects: unknown[] };
+  assert.equal(persisted.tasks[0]?.projectId, id);
+  assert.equal(persisted.projects.length, 1);
+
+  state().setProjectFilter(id);
+  state().deleteProject(id!);
+  assert.equal(state().tasks[0]?.projectId, null);
+  assert.equal(state().projectFilter, null);
+  assert.equal(state().projects[0]?.deleted, true);
+});
+
+test("migrating a v3 payload adds empty projects and a null projectId", () => {
+  const options = useCadence.persist.getOptions();
+  const migrate = options.migrate as unknown as (state: unknown, version: number) => {
+    projects: unknown[];
+    tasks: Array<{ projectId: string | null }>;
+  };
+  const migrated = migrate(
+    {
+      tasks: [
+        {
+          id: "old",
+          title: "Old task",
+          notes: "",
+          categoryId: null,
+          date: null,
+          repeat: { kind: "none" },
+          done: false,
+          completedAt: null,
+          createdAt: "a",
+          updatedAt: "a",
+        },
+      ],
+      categories: [],
+    },
+    3,
+  );
+  assert.deepEqual(migrated.projects, []);
+  assert.equal(migrated.tasks[0]?.projectId, null);
 });

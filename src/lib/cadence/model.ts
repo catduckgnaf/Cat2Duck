@@ -15,11 +15,21 @@ export type Category = {
   deleted?: boolean;
 };
 
+/** A project is a named group a task belongs to alongside its category. */
+export type Project = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+};
+
 export type Task = {
   id: string;
   title: string;
   notes: string;
   categoryId: string | null;
+  projectId: string | null;
   date: string | null;
   repeat: Repeat;
   done: boolean;
@@ -29,11 +39,22 @@ export type Task = {
   deleted?: boolean;
 };
 
-export type ViewId = "feed" | "day" | "upcoming" | "overdue" | "later" | "repeats" | "done";
+export type ViewId =
+  | "all"
+  | "feed"
+  | "day"
+  | "upcoming"
+  | "overdue"
+  | "later"
+  | "repeats"
+  | "done"
+  | "workflow"
+  | "projects";
 
 export type Refine = {
   query: string;
   categoryId: string | null;
+  projectId: string | null;
   showRepeating: boolean;
 };
 
@@ -273,6 +294,15 @@ export function categoryName(categories: Category[], id: string | null): string 
   return activeCategories(categories).find((c) => c.id === id)?.name ?? null;
 }
 
+export function activeProjects(projects: Project[]): Project[] {
+  return projects.filter((p) => !p.deleted).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export function projectName(projects: Project[], id: string | null): string | null {
+  if (!id) return null;
+  return activeProjects(projects).find((p) => p.id === id)?.name ?? null;
+}
+
 function byCreatedDesc(a: Task, b: Task): number {
   return a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0;
 }
@@ -284,13 +314,18 @@ export function visibleTasks(
   focusDate: string,
   today: string,
   refine: Refine,
+  projects: Project[] = [],
 ): Task[] {
   const names = new Map(activeCategories(categories).map((c) => [c.id, c.name.toLowerCase()]));
+  const projectNames = new Map(activeProjects(projects).map((p) => [p.id, p.name.toLowerCase()]));
   const q = refine.query.trim().toLowerCase();
   return tasks.filter((task) => {
     if (task.deleted) return false;
     if (view === "done") {
       if (!task.done) return false;
+    } else if (view === "all" || view === "projects" || view === "workflow") {
+      // Every task, open or done, with no date filter. The screen gives
+      // each of these views its own grouping on top of the same set.
     } else if (task.done) {
       return false;
     } else {
@@ -318,11 +353,54 @@ export function visibleTasks(
       }
     }
     if (refine.categoryId && task.categoryId !== refine.categoryId) return false;
+    if (refine.projectId && task.projectId !== refine.projectId) return false;
     if (!refine.showRepeating && task.repeat.kind !== "none" && view !== "repeats") return false;
     if (!q) return true;
-    const blob = `${task.title}\n${task.notes}\n${names.get(task.categoryId ?? "") ?? ""}`.toLowerCase();
+    const blob =
+      `${task.title}\n${task.notes}\n${names.get(task.categoryId ?? "") ?? ""}\n${projectNames.get(task.projectId ?? "") ?? ""}`.toLowerCase();
     return blob.includes(q);
   });
+}
+
+export type WorkflowColumnId = "overdue" | "today" | "upcoming" | "later" | "done";
+
+export type WorkflowColumn = {
+  id: WorkflowColumnId;
+  label: string;
+  tasks: Task[];
+};
+
+export const WORKFLOW_COLUMNS: { id: WorkflowColumnId; label: string }[] = [
+  { id: "overdue", label: "Overdue" },
+  { id: "today", label: "Today" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "later", label: "Later" },
+  { id: "done", label: "Done" },
+];
+
+/** The one workflow column a task sits in, from its shown date / done state only. */
+export function workflowColumnFor(task: Task, today: string): WorkflowColumnId {
+  if (task.done) return "done";
+  const when = shownDate(task, today);
+  if (!when) return "later";
+  if (when < today) return "overdue";
+  if (when > today) return "upcoming";
+  return "today";
+}
+
+export function buildWorkflow(
+  tasks: Task[],
+  categories: Category[],
+  focusDate: string,
+  today: string,
+  refine: Refine,
+  projects: Project[] = [],
+): WorkflowColumn[] {
+  const items = visibleTasks(tasks, categories, "workflow", focusDate, today, refine, projects);
+  return WORKFLOW_COLUMNS.map((column) => ({
+    ...column,
+    tasks: items.filter((task) => workflowColumnFor(task, today) === column.id).sort(byCreatedDesc),
+  }));
 }
 
 export function buildGroups(
@@ -332,8 +410,22 @@ export function buildGroups(
   focusDate: string,
   today: string,
   refine: Refine,
+  projects: Project[] = [],
 ): Group[] {
-  const items = visibleTasks(tasks, categories, view, focusDate, today, refine);
+  const items = visibleTasks(tasks, categories, view, focusDate, today, refine, projects);
+  if (view === "all" || view === "projects") {
+    const open = items.filter((task) => !task.done).sort(byCreatedDesc);
+    const done = items
+      .filter((task) => task.done)
+      .sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
+    const groups: Group[] = [];
+    if (open.length) groups.push({ key: "open", label: "Open", tasks: open });
+    if (done.length) groups.push({ key: "done", label: "Done", tasks: done });
+    return groups;
+  }
+  if (view === "workflow") {
+    return items.length ? [{ key: "workflow", label: "", tasks: [...items].sort(byCreatedDesc) }] : [];
+  }
   if (view === "feed") {
     const dated = items.map((task) => ({ task, when: shownDate(task, today) ?? "later" }));
     const overdue = dated
@@ -397,8 +489,9 @@ export function countFor(
   focusDate: string,
   today: string,
   refine: Refine,
+  projects: Project[] = [],
 ): number {
-  return visibleTasks(tasks, categories, view, focusDate, today, refine).length;
+  return visibleTasks(tasks, categories, view, focusDate, today, refine, projects).length;
 }
 
 function stamp(partial: Omit<Task, "createdAt" | "updatedAt" | "completedAt" | "done" | "deleted"> & Partial<Task>): Task {
@@ -412,7 +505,7 @@ function stamp(partial: Omit<Task, "createdAt" | "updatedAt" | "completedAt" | "
   };
 }
 
-export function makeSeed(today: string): { tasks: Task[]; categories: Category[] } {
+export function makeSeed(today: string): { tasks: Task[]; categories: Category[]; projects: Project[] } {
   const now = new Date().toISOString();
   const cat = (name: string, offset: number): Category => ({
     id: crypto.randomUUID(),
@@ -436,11 +529,13 @@ export function makeSeed(today: string): { tasks: Task[]; categories: Category[]
       title,
       notes,
       categoryId,
+      projectId: null,
       date,
       repeat,
     });
   const saturday = upcomingWeekend(today);
   return {
+    projects: [],
     categories: [home, work, health, personal],
     tasks: [
       task(

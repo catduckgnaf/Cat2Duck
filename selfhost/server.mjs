@@ -24,16 +24,20 @@ export function validateToken(raw) {
 }
 
 function emptyState() {
-  return { revision: 0, tasks: [], categories: [] };
+  return { revision: 0, tasks: [], categories: [], projects: [] };
 }
 
 function normalizeState(value) {
   if (!value || typeof value !== "object") throw new Error("State must be an object.");
   if (!Array.isArray(value.tasks) || !Array.isArray(value.categories)) throw new Error("State must include tasks and categories arrays.");
+  // Projects are optional: state files and clients from before projects
+  // existed have no projects array, which reads as an empty one.
+  if (value.projects !== undefined && !Array.isArray(value.projects)) throw new Error("State projects must be an array when present.");
   return {
     revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     tasks: value.tasks,
     categories: value.categories,
+    projects: value.projects ?? [],
   };
 }
 
@@ -189,7 +193,7 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         return;
       }
       if (req.method === "GET") {
-        send(res, 200, JSON.stringify({ tasks: state.tasks, categories: state.categories }), undefined, { ...headers, ETag: etag(state.revision) });
+        send(res, 200, JSON.stringify({ tasks: state.tasks, categories: state.categories, projects: state.projects }), undefined, { ...headers, ETag: etag(state.revision) });
         return;
       }
 
@@ -221,7 +225,11 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         send(res, 400, JSON.stringify({ error: "Expected tasks and categories arrays" }), undefined, headers);
         return;
       }
-      if (parsed.tasks.length > 5000 || parsed.categories.length > 200) {
+      if (parsed.projects !== undefined && !Array.isArray(parsed.projects)) {
+        send(res, 400, JSON.stringify({ error: "Expected projects to be an array when present" }), undefined, headers);
+        return;
+      }
+      if (parsed.tasks.length > 5000 || parsed.categories.length > 200 || (parsed.projects?.length ?? 0) > 200) {
         send(res, 400, JSON.stringify({ error: "Too many items" }), undefined, headers);
         return;
       }
@@ -233,7 +241,14 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
           conflict.revision = state.revision;
           throw conflict;
         }
-        const nextState = { revision: state.revision + 1, tasks: parsed.tasks, categories: parsed.categories };
+        // A client that predates projects (e.g. the Android app) omits the
+        // array; keep the stored projects instead of wiping them.
+        const nextState = {
+          revision: state.revision + 1,
+          tasks: parsed.tasks,
+          categories: parsed.categories,
+          projects: parsed.projects ?? state.projects,
+        };
         await persistState(dataPath, nextState);
         state = nextState;
         return nextState.revision;
