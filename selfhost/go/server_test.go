@@ -553,3 +553,213 @@ func TestProjectsDefaultEmpty(t *testing.T) {
 		t.Fatalf("fresh state projects = %s, want []", got)
 	}
 }
+
+type restTask struct {
+	ID          string          `json:"id"`
+	Title       string          `json:"title"`
+	Notes       string          `json:"notes"`
+	Date        *string         `json:"date"`
+	Repeat      json.RawMessage `json:"repeat"`
+	Done        bool            `json:"done"`
+	CompletedAt *string         `json:"completedAt"`
+	OwnerID     *string         `json:"ownerId"`
+	SharedWith  []string        `json:"sharedWith"`
+	Deleted     bool            `json:"deleted"`
+	CreatedAt   string          `json:"createdAt"`
+	UpdatedAt   string          `json:"updatedAt"`
+}
+
+func doRest(t *testing.T, method, url, token, body string) *http.Response {
+	t.Helper()
+	return doRequest(t, method, url, token, body, nil)
+}
+
+func decodeTask(t *testing.T, res *http.Response) restTask {
+	t.Helper()
+	defer res.Body.Close()
+	var task restTask
+	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+func listRestTasks(t *testing.T, base, token string) []restTask {
+	t.Helper()
+	res := doRest(t, http.MethodGet, base+"/v1/tasks", token, "")
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("list tasks status %d", res.StatusCode)
+	}
+	var body struct {
+		Tasks []restTask `json:"tasks"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Tasks
+}
+
+func TestRestTasksAdminHappyPath(t *testing.T) {
+	server, _ := newTestServer(t)
+	defer server.Close()
+	created := doRest(t, http.MethodPost, server.URL+"/v1/tasks", testToken, `{"title":"Water the plants","date":"2026-10-01","notes":"Balcony too"}`)
+	if created.StatusCode != 201 {
+		t.Fatalf("create status %d", created.StatusCode)
+	}
+	task := decodeTask(t, created)
+	if task.ID == "" || task.Title != "Water the plants" || task.Notes != "Balcony too" || task.Date == nil || *task.Date != "2026-10-01" {
+		t.Fatalf("created task %+v", task)
+	}
+	if string(task.Repeat) != `{"kind":"none"}` || task.Done || task.CompletedAt != nil || task.OwnerID != nil || len(task.SharedWith) != 0 || task.CreatedAt == "" || task.CreatedAt != task.UpdatedAt {
+		t.Fatalf("created task defaults %+v repeat %s", task, task.Repeat)
+	}
+	if listed := listRestTasks(t, server.URL, testToken); len(listed) != 1 || listed[0].ID != task.ID {
+		t.Fatalf("listed %+v", listed)
+	}
+	patched := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+task.ID, testToken, `{"done":true}`)
+	if patched.StatusCode != 200 {
+		t.Fatalf("patch status %d", patched.StatusCode)
+	}
+	doneTask := decodeTask(t, patched)
+	if !doneTask.Done || doneTask.CompletedAt == nil {
+		t.Fatalf("patched task %+v", doneTask)
+	}
+	reopened := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+task.ID, testToken, `{"done":false,"title":"Water the plants!"}`)
+	reopenedTask := decodeTask(t, reopened)
+	if reopenedTask.Done || reopenedTask.CompletedAt != nil || reopenedTask.Title != "Water the plants!" {
+		t.Fatalf("reopened task %+v", reopenedTask)
+	}
+	deleted := doRest(t, http.MethodDelete, server.URL+"/v1/tasks/"+task.ID, testToken, "")
+	if deleted.StatusCode != 200 {
+		t.Fatalf("delete status %d", deleted.StatusCode)
+	}
+	if tombstone := decodeTask(t, deleted); !tombstone.Deleted {
+		t.Fatalf("delete did not tombstone %+v", tombstone)
+	}
+	if listed := listRestTasks(t, server.URL, testToken); len(listed) != 0 {
+		t.Fatalf("listed after delete %+v", listed)
+	}
+	stateView, _ := getStateGo(t, server.URL, testToken)
+	if len(stateView["tasks"]) != 1 || stateView["tasks"][0]["deleted"] != true {
+		t.Fatalf("tombstone missing from state %+v", stateView["tasks"])
+	}
+	if res := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+task.ID, testToken, `{"done":true}`); res.StatusCode != 404 {
+		res.Body.Close()
+		t.Fatalf("patch deleted status %d", res.StatusCode)
+	}
+	if res := doRest(t, http.MethodDelete, server.URL+"/v1/tasks/"+task.ID, testToken, ""); res.StatusCode != 404 {
+		res.Body.Close()
+		t.Fatalf("delete deleted status %d", res.StatusCode)
+	}
+}
+
+func TestRestTasksAuthAndValidation(t *testing.T) {
+	server, _ := newTestServer(t)
+	defer server.Close()
+	cases := []struct {
+		method, path, token, body string
+		want                      int
+	}{
+		{http.MethodGet, "/v1/tasks", "", "", 401},
+		{http.MethodGet, "/v1/tasks", "wrong-token", "", 401},
+		{http.MethodPost, "/v1/tasks", "", `{"title":"x"}`, 401},
+		{http.MethodPost, "/v1/tasks", testToken, `{not json`, 400},
+		{http.MethodPost, "/v1/tasks", testToken, `{}`, 400},
+		{http.MethodPost, "/v1/tasks", testToken, `{"title":"   "}`, 400},
+		{http.MethodPost, "/v1/tasks", testToken, `{"title":"x","date":"01/10/2026"}`, 400},
+		{http.MethodPost, "/v1/tasks", testToken, `{"title":"x","repeat":{"kind":"hourly"}}`, 400},
+		{http.MethodPatch, "/v1/tasks/does-not-exist", testToken, `{"done":true}`, 404},
+		{http.MethodDelete, "/v1/tasks/does-not-exist", testToken, "", 404},
+	}
+	for _, tc := range cases {
+		res := doRest(t, tc.method, server.URL+tc.path, tc.token, tc.body)
+		res.Body.Close()
+		if res.StatusCode != tc.want {
+			t.Fatalf("%s %s status %d, want %d", tc.method, tc.path, res.StatusCode, tc.want)
+		}
+	}
+	created := doRest(t, http.MethodPost, server.URL+"/v1/tasks", testToken, `{"title":"Real"}`)
+	task := decodeTask(t, created)
+	if res := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+task.ID, testToken, `{nope`); res.StatusCode != 400 {
+		res.Body.Close()
+		t.Fatalf("patch invalid json status %d", res.StatusCode)
+	}
+	if res := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+task.ID, testToken, `{"done":"yes"}`); res.StatusCode != 400 {
+		res.Body.Close()
+		t.Fatalf("patch bad done status %d", res.StatusCode)
+	}
+}
+
+func TestRestTasksUserScopingAndSharing(t *testing.T) {
+	server, _ := newTestServer(t)
+	defer server.Close()
+	alice := createUserGo(t, server.URL, "Alice")
+	bob := createUserGo(t, server.URL, "Bob")
+
+	created := doRest(t, http.MethodPost, server.URL+"/v1/tasks", alice.Token, `{"title":"Alice toduck"}`)
+	if created.StatusCode != 201 {
+		t.Fatalf("alice create status %d", created.StatusCode)
+	}
+	aliceTask := decodeTask(t, created)
+	if aliceTask.OwnerID == nil || *aliceTask.OwnerID != alice.ID {
+		t.Fatalf("alice task owner %+v", aliceTask.OwnerID)
+	}
+	bobCreated := doRest(t, http.MethodPost, server.URL+"/v1/tasks", bob.Token, `{"title":"Bob toduck"}`)
+	bobTask := decodeTask(t, bobCreated)
+
+	if listed := listRestTasks(t, server.URL, alice.Token); len(listed) != 1 || listed[0].ID != aliceTask.ID {
+		t.Fatalf("alice list %+v", listed)
+	}
+	if listed := listRestTasks(t, server.URL, bob.Token); len(listed) != 1 || listed[0].ID != bobTask.ID {
+		t.Fatalf("bob list %+v", listed)
+	}
+	if res := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+aliceTask.ID, bob.Token, `{"done":true}`); res.StatusCode != 404 {
+		res.Body.Close()
+		t.Fatalf("bob patch alice status %d", res.StatusCode)
+	}
+	if res := doRest(t, http.MethodDelete, server.URL+"/v1/tasks/"+aliceTask.ID, bob.Token, ""); res.StatusCode != 404 {
+		res.Body.Close()
+		t.Fatalf("bob delete alice status %d", res.StatusCode)
+	}
+
+	// Alice shares her task with Bob through scoped sync.
+	_, revision := getStateGo(t, server.URL, alice.Token)
+	sharedTask := taskJSON(aliceTask.ID, "Alice toduck", alice.ID, []string{bob.ID})
+	res := putStateGo(t, server.URL, alice.Token, revision, `{"tasks":[`+sharedTask+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("share put status %d", res.StatusCode)
+	}
+
+	if listed := listRestTasks(t, server.URL, bob.Token); len(listed) != 2 {
+		t.Fatalf("bob list after share %+v", listed)
+	}
+	patched := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+aliceTask.ID, bob.Token, `{"done":true}`)
+	if patched.StatusCode != 200 {
+		t.Fatalf("bob patch shared status %d", patched.StatusCode)
+	}
+	if doneTask := decodeTask(t, patched); !doneTask.Done {
+		t.Fatalf("bob patch shared %+v", doneTask)
+	}
+	if res := doRest(t, http.MethodDelete, server.URL+"/v1/tasks/"+aliceTask.ID, bob.Token, ""); res.StatusCode != 403 {
+		res.Body.Close()
+		t.Fatalf("bob delete shared status %d", res.StatusCode)
+	}
+	forged := doRest(t, http.MethodPatch, server.URL+"/v1/tasks/"+aliceTask.ID, bob.Token, `{"title":"Still Alice's","ownerId":"`+bob.ID+`","sharedWith":[]}`)
+	forgedTask := decodeTask(t, forged)
+	if forgedTask.OwnerID == nil || *forgedTask.OwnerID != alice.ID || len(forgedTask.SharedWith) != 1 || forgedTask.SharedWith[0] != bob.ID {
+		t.Fatalf("forged patch changed ownership %+v", forgedTask)
+	}
+
+	if listed := listRestTasks(t, server.URL, testToken); len(listed) != 2 {
+		t.Fatalf("admin list %+v", listed)
+	}
+	if res := doRest(t, http.MethodDelete, server.URL+"/v1/tasks/"+aliceTask.ID, alice.Token, ""); res.StatusCode != 200 {
+		res.Body.Close()
+		t.Fatalf("alice delete own status %d", res.StatusCode)
+	}
+	if listed := listRestTasks(t, server.URL, bob.Token); len(listed) != 1 || listed[0].ID != bobTask.ID {
+		t.Fatalf("bob list after alice delete %+v", listed)
+	}
+}

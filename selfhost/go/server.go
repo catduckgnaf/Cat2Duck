@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const defaultMaxBody = 1_500_000
@@ -408,6 +409,265 @@ func mergeUserTasks(storedRaw, incomingRaw json.RawMessage, users []userRecord, 
 	return joinTasks(result)
 }
 
+// --- REST task API helpers (mirror server.mjs) ---
+
+var dateKeyPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+func nowISO() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
+}
+
+func taskField(raw json.RawMessage, key string) (json.RawMessage, bool) {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return nil, false
+	}
+	value, ok := obj[key]
+	return value, ok
+}
+
+func setTaskField(raw json.RawMessage, key string, value json.RawMessage) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		obj = map[string]json.RawMessage{}
+	}
+	obj[key] = value
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func marshalField(value any) json.RawMessage {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+// stringBodyField reads a field of a JSON request body: present reports
+// whether the key exists at all; ok=false when a present value has the
+// wrong type (for nullable fields, JSON null reads as present + nil).
+func stringBodyField(body map[string]json.RawMessage, key string) (value *string, present bool, ok bool) {
+	raw, present := body[key]
+	if !present {
+		return nil, false, true
+	}
+	if string(raw) == "null" {
+		return nil, true, true
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil, true, false
+	}
+	return &text, true, true
+}
+
+// normalizeRepeatInput mirrors normalizeRepeat in model.ts; ok=false when
+// the value is not a repeat shape at all.
+func normalizeRepeatInput(raw json.RawMessage) (json.RawMessage, bool) {
+	var value struct {
+		Kind  string `json:"kind"`
+		Every int    `json:"every"`
+		Unit  string `json:"unit"`
+		Days  []int  `json:"days"`
+	}
+	if json.Unmarshal(raw, &value) != nil {
+		return nil, false
+	}
+	switch value.Kind {
+	case "none", "daily", "weekdays", "weekly", "monthly":
+		return marshalField(map[string]string{"kind": value.Kind}), true
+	case "interval":
+		every := value.Every
+		if every < 1 {
+			every = 1
+		}
+		if every > 99 {
+			every = 99
+		}
+		unit := value.Unit
+		if unit != "week" && unit != "month" {
+			unit = "day"
+		}
+		return marshalField(map[string]any{"kind": "interval", "every": every, "unit": unit}), true
+	case "days":
+		rawDays, present := map[string]json.RawMessage{}, false
+		_ = json.Unmarshal(raw, &rawDays)
+		_, present = rawDays["days"]
+		if !present {
+			return nil, false
+		}
+		seen := map[int]bool{}
+		days := []int{}
+		for _, day := range value.Days {
+			if day < 0 || day > 6 || seen[day] {
+				continue
+			}
+			seen[day] = true
+			days = append(days, day)
+		}
+		for i := 0; i < len(days); i++ {
+			for j := i + 1; j < len(days); j++ {
+				if days[j] < days[i] {
+					days[i], days[j] = days[j], days[i]
+				}
+			}
+		}
+		return marshalField(map[string]any{"kind": "days", "days": days}), true
+	}
+	return nil, false
+}
+
+// restTaskFromBody builds a stored task from a REST POST body, mirroring
+// the Web client's addTask shape/defaults. Owner stamping is the caller's.
+func restTaskFromBody(body map[string]json.RawMessage, ownerID *string) (json.RawMessage, string) {
+	titleValue, titlePresent, titleOK := stringBodyField(body, "title")
+	if !titlePresent || !titleOK || titleValue == nil {
+		return nil, "A task title is required"
+	}
+	title := truncateRunes(strings.TrimSpace(*titleValue), 200)
+	if title == "" {
+		return nil, "A task title is required"
+	}
+	notes := ""
+	if value, present, ok := stringBodyField(body, "notes"); present {
+		if !ok || value == nil {
+			return nil, "notes must be a string"
+		}
+		notes = truncateRunes(strings.TrimSpace(*value), 20_000)
+	}
+	date, dateOK := nullableDateField(body)
+	if !dateOK {
+		return nil, "date must be YYYY-MM-DD or null"
+	}
+	categoryID, categoryOK := nullableIDField(body, "categoryId")
+	if !categoryOK {
+		return nil, "categoryId must be a string or null"
+	}
+	projectID, projectOK := nullableIDField(body, "projectId")
+	if !projectOK {
+		return nil, "projectId must be a string or null"
+	}
+	repeat := json.RawMessage(`{"kind":"none"}`)
+	if raw, present := body["repeat"]; present {
+		normalized, ok := normalizeRepeatInput(raw)
+		if !ok {
+			return nil, "Invalid repeat"
+		}
+		repeat = normalized
+	}
+	now := nowISO()
+	task := map[string]json.RawMessage{
+		"id":          marshalField(newUserID()),
+		"title":       marshalField(title),
+		"notes":       marshalField(notes),
+		"categoryId":  marshalField(categoryID),
+		"projectId":   marshalField(projectID),
+		"date":        marshalField(date),
+		"repeat":      repeat,
+		"done":        marshalField(false),
+		"completedAt": json.RawMessage("null"),
+		"createdAt":   marshalField(now),
+		"updatedAt":   marshalField(now),
+		"ownerId":     marshalField(ownerID),
+		"sharedWith":  json.RawMessage("[]"),
+	}
+	raw, err := json.Marshal(task)
+	if err != nil {
+		return nil, "Invalid JSON"
+	}
+	return raw, ""
+}
+
+func nullableDateField(body map[string]json.RawMessage) (*string, bool) {
+	value, present, ok := stringBodyField(body, "date")
+	if !present {
+		return nil, true
+	}
+	if !ok {
+		return nil, false
+	}
+	if value == nil {
+		return nil, true
+	}
+	if !dateKeyPattern.MatchString(*value) {
+		return nil, false
+	}
+	return value, true
+}
+
+func nullableIDField(body map[string]json.RawMessage, key string) (*string, bool) {
+	value, present, ok := stringBodyField(body, key)
+	if !present || !ok {
+		return value, ok
+	}
+	return value, true
+}
+
+// restPatchFromBody validates a REST PATCH body into raw field updates.
+// Ownership/sharing fields are not patchable.
+func restPatchFromBody(body map[string]json.RawMessage) (map[string]json.RawMessage, string) {
+	patch := map[string]json.RawMessage{}
+	if _, present := body["title"]; present {
+		value, _, ok := stringBodyField(body, "title")
+		if !ok || value == nil {
+			return nil, "A task title is required"
+		}
+		title := truncateRunes(strings.TrimSpace(*value), 200)
+		if title == "" {
+			return nil, "A task title is required"
+		}
+		patch["title"] = marshalField(title)
+	}
+	if _, present := body["notes"]; present {
+		value, _, ok := stringBodyField(body, "notes")
+		if !ok || value == nil {
+			return nil, "notes must be a string"
+		}
+		patch["notes"] = marshalField(truncateRunes(*value, 20_000))
+	}
+	if _, present := body["date"]; present {
+		value, ok := nullableDateField(body)
+		if !ok {
+			return nil, "date must be YYYY-MM-DD or null"
+		}
+		patch["date"] = marshalField(value)
+	}
+	for _, key := range []string{"categoryId", "projectId"} {
+		if _, present := body[key]; present {
+			value, ok := nullableIDField(body, key)
+			if !ok {
+				return nil, key + " must be a string or null"
+			}
+			patch[key] = marshalField(value)
+		}
+	}
+	if raw, present := body["done"]; present {
+		var done bool
+		if json.Unmarshal(raw, &done) != nil {
+			return nil, "done must be a boolean"
+		}
+		patch["done"] = marshalField(done)
+	}
+	return patch, ""
+}
+
+func taskVisibleForRest(raw json.RawMessage, isAdmin bool, userID string) bool {
+	meta := parseTaskMeta(raw)
+	if meta.Deleted {
+		return false
+	}
+	return isAdmin || visibleToUser(meta, userID)
+}
+
 func newServer(cfg config) http.Handler {
 	token, err := validateToken(cfg.token)
 	if err != nil {
@@ -446,6 +706,12 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.stateEndpoint(w, r)
 	case (r.URL.Path == "/v1/users" || strings.HasPrefix(r.URL.Path, "/v1/users/") || r.URL.Path == "/v1/me") && r.Method == http.MethodOptions:
 		s.options(w, r, "Authorization, Content-Type", "GET, POST, DELETE, OPTIONS")
+	case (r.URL.Path == "/v1/tasks" || strings.HasPrefix(r.URL.Path, "/v1/tasks/")) && r.Method == http.MethodOptions:
+		s.options(w, r, "Authorization, Content-Type", "GET, POST, PATCH, DELETE, OPTIONS")
+	case r.URL.Path == "/v1/tasks" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		s.tasksEndpoint(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/tasks/") && (r.Method == http.MethodPatch || r.Method == http.MethodDelete):
+		s.tasksEndpoint(w, r)
 	case r.URL.Path == "/v1/me" && r.Method == http.MethodGet:
 		s.meEndpoint(w, r)
 	case r.URL.Path == "/v1/users" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
@@ -646,6 +912,176 @@ func (s *server) usersEndpoint(w http.ResponseWriter, r *http.Request) {
 		s.state = next
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
+}
+
+func writeRawJSON(w http.ResponseWriter, status int, raw json.RawMessage) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
+}
+
+// tasksEndpoint is the REST task API (Home Assistant integration and
+// other automation). Scoping mirrors server.mjs / the sync API: the
+// admin token sees everything; a personal token sees its own tasks plus
+// tasks shared with it, and new tasks are stamped with that user as owner.
+func (s *server) tasksEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !s.originAllowed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Origin not allowed"})
+		return
+	}
+	s.cors(w, r)
+	isAdmin, user, authOK := s.authenticate(r)
+	if !authOK {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+	isCollection := r.URL.Path == "/v1/tasks"
+
+	if isCollection && r.Method == http.MethodGet {
+		s.mu.Lock()
+		stored := s.state.Tasks
+		s.mu.Unlock()
+		tasks := []json.RawMessage{}
+		for _, raw := range splitTasks(stored) {
+			if taskVisibleForRest(raw, isAdmin, userID) {
+				tasks = append(tasks, raw)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string][]json.RawMessage{"tasks": tasks})
+		return
+	}
+
+	readTaskBody := func() (map[string]json.RawMessage, bool) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxBody))
+		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Request body too large"})
+				return nil, false
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+			return nil, false
+		}
+		var parsed map[string]json.RawMessage
+		if json.Unmarshal(body, &parsed) != nil || parsed == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+			return nil, false
+		}
+		return parsed, true
+	}
+
+	if isCollection && r.Method == http.MethodPost {
+		body, ok := readTaskBody()
+		if !ok {
+			return
+		}
+		var ownerID *string
+		if !isAdmin {
+			ownerID = &userID
+		}
+		task, errMessage := restTaskFromBody(body, ownerID)
+		if errMessage != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMessage})
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// New tasks go first, like the Web client's addTask.
+		tasks := append([]json.RawMessage{task}, splitTasks(s.state.Tasks)...)
+		next := s.state
+		next.Revision = s.state.Revision + 1
+		next.Tasks = joinTasks(tasks)
+		next.projectsPresent = true
+		if err := persistState(s.dataPath, next); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
+			return
+		}
+		s.state = next
+		writeRawJSON(w, http.StatusCreated, task)
+		return
+	}
+
+	// Item endpoints: PATCH / DELETE /v1/tasks/:id
+	targetID, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/v1/tasks/"))
+	if err != nil || targetID == "" || strings.Contains(targetID, "/") {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Task not found"})
+		return
+	}
+	var patch map[string]json.RawMessage
+	if r.Method == http.MethodPatch {
+		body, ok := readTaskBody()
+		if !ok {
+			return
+		}
+		var errMessage string
+		patch, errMessage = restPatchFromBody(body)
+		if errMessage != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMessage})
+			return
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tasks := splitTasks(s.state.Tasks)
+	index := -1
+	for i, raw := range tasks {
+		if parseTaskMeta(raw).ID == targetID {
+			index = i
+			break
+		}
+	}
+	if index < 0 || !taskVisibleForRest(tasks[index], isAdmin, userID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Task not found"})
+		return
+	}
+	stored := tasks[index]
+	if r.Method == http.MethodDelete {
+		// Only the owner or the admin may delete; a user the task is
+		// shared with gets 403.
+		meta := parseTaskMeta(stored)
+		if !isAdmin && (meta.OwnerID == nil || *meta.OwnerID != userID) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Only the owner can delete this task"})
+			return
+		}
+		stored = setTaskField(stored, "deleted", marshalField(true))
+		stored = setTaskField(stored, "updatedAt", marshalField(nowISO()))
+	} else {
+		now := nowISO()
+		wasDone := false
+		if raw, ok := taskField(stored, "done"); ok {
+			_ = json.Unmarshal(raw, &wasDone)
+		}
+		for key, value := range patch {
+			stored = setTaskField(stored, key, value)
+		}
+		if raw, patched := patch["done"]; patched {
+			var done bool
+			_ = json.Unmarshal(raw, &done)
+			if done != wasDone {
+				if done {
+					stored = setTaskField(stored, "completedAt", marshalField(now))
+				} else {
+					stored = setTaskField(stored, "completedAt", json.RawMessage("null"))
+				}
+			}
+		}
+		stored = setTaskField(stored, "updatedAt", marshalField(now))
+	}
+	tasks[index] = stored
+	next := s.state
+	next.Revision = s.state.Revision + 1
+	next.Tasks = joinTasks(tasks)
+	next.projectsPresent = true
+	if err := persistState(s.dataPath, next); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
+		return
+	}
+	s.state = next
+	writeRawJSON(w, http.StatusOK, stored)
 }
 
 func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {

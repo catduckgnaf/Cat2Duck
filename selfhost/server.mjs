@@ -77,6 +77,126 @@ function visibleToUser(task, userId) {
   return taskOwnerId(task) === userId || taskSharedWith(task).includes(userId);
 }
 
+const REPEAT_KINDS = new Set(["none", "daily", "weekdays", "weekly", "monthly", "interval", "days"]);
+
+/** Mirror normalizeRepeat in src/lib/cadence/model.ts; null = not a repeat shape at all. */
+function normalizeRepeatInput(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !REPEAT_KINDS.has(value.kind)) return null;
+  switch (value.kind) {
+    case "interval": {
+      const every = Math.min(99, Math.max(1, Math.floor(Number(value.every)) || 1));
+      const unit = value.unit === "week" || value.unit === "month" ? value.unit : "day";
+      return { kind: "interval", every, unit };
+    }
+    case "days": {
+      if (!Array.isArray(value.days)) return null;
+      const days = [...new Set(value.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a, b) => a - b);
+      return { kind: "days", days };
+    }
+    default:
+      return { kind: value.kind };
+  }
+}
+
+function isDateKey(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isNullableId(value) {
+  return value === null || typeof value === "string";
+}
+
+/**
+ * Build a stored task from a REST POST body, mirroring the Web client's
+ * addTask shape/defaults (src/lib/cadence/store.ts). ownerId is stamped
+ * from the caller's token by the handler, never taken from the body.
+ * Returns { task } or { error }.
+ */
+function restTaskFromBody(parsed, ownerId) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { error: "Invalid JSON" };
+  const title = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 200) : "";
+  if (!title) return { error: "A task title is required" };
+  if (parsed.notes !== undefined && typeof parsed.notes !== "string") return { error: "notes must be a string" };
+  const notes = (parsed.notes ?? "").trim().slice(0, 20_000);
+  const date = parsed.date === undefined ? null : parsed.date;
+  if (!(date === null || isDateKey(date))) return { error: "date must be YYYY-MM-DD or null" };
+  const categoryId = parsed.categoryId === undefined ? null : parsed.categoryId;
+  if (!isNullableId(categoryId)) return { error: "categoryId must be a string or null" };
+  const projectId = parsed.projectId === undefined ? null : parsed.projectId;
+  if (!isNullableId(projectId)) return { error: "projectId must be a string or null" };
+  const repeat = parsed.repeat === undefined ? { kind: "none" } : normalizeRepeatInput(parsed.repeat);
+  if (!repeat) return { error: "Invalid repeat" };
+  const now = new Date().toISOString();
+  return {
+    task: {
+      id: randomUUID(),
+      title,
+      notes,
+      categoryId,
+      projectId,
+      date,
+      repeat,
+      done: false,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      ownerId,
+      sharedWith: [],
+    },
+  };
+}
+
+/**
+ * Validate a REST PATCH body into a patch object holding only the fields
+ * the caller actually sent. Ownership/sharing fields are not patchable.
+ * Returns { patch } or { error }.
+ */
+function restPatchFromBody(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { error: "Invalid JSON" };
+  const has = (key) => Object.prototype.hasOwnProperty.call(parsed, key);
+  const patch = {};
+  if (has("title")) {
+    const title = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 200) : "";
+    if (!title) return { error: "A task title is required" };
+    patch.title = title;
+  }
+  if (has("notes")) {
+    if (typeof parsed.notes !== "string") return { error: "notes must be a string" };
+    patch.notes = parsed.notes.slice(0, 20_000);
+  }
+  if (has("date")) {
+    if (!(parsed.date === null || isDateKey(parsed.date))) return { error: "date must be YYYY-MM-DD or null" };
+    patch.date = parsed.date;
+  }
+  if (has("categoryId")) {
+    if (!isNullableId(parsed.categoryId)) return { error: "categoryId must be a string or null" };
+    patch.categoryId = parsed.categoryId;
+  }
+  if (has("projectId")) {
+    if (!isNullableId(parsed.projectId)) return { error: "projectId must be a string or null" };
+    patch.projectId = parsed.projectId;
+  }
+  if (has("done")) {
+    if (typeof parsed.done !== "boolean") return { error: "done must be a boolean" };
+    patch.done = parsed.done;
+  }
+  return { patch };
+}
+
+function applyRestPatch(current, patch) {
+  const now = new Date().toISOString();
+  const next = { ...current, ...patch, updatedAt: now };
+  if (patch.done !== undefined && patch.done !== current.done) {
+    next.completedAt = patch.done ? now : null;
+  }
+  return next;
+}
+
+function taskVisibleForRest(task, auth) {
+  if (!task || task.deleted) return false;
+  return auth.kind === "admin" || visibleToUser(task, auth.user.id);
+}
+
 /** Keep only ids of registered users, de-duplicated. */
 function sanitizeSharedWith(value, state) {
   const known = new Set(state.users.map((user) => user.id));
@@ -280,11 +400,17 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
     return true;
   }
 
-  /** Serialize a users mutation through the same write queue as state PUTs. */
-  function mutateUsers(mutator) {
+  /**
+   * Serialize a mutation through the same write queue as state PUTs.
+   * The mutator returns undefined for "no such thing" (nothing persisted),
+   * { value } to answer without persisting, or { nextState, value } to
+   * persist nextState and answer with value.
+   */
+  function mutateState(mutator) {
     const nextPromise = writing.catch(() => {}).then(async () => {
       const result = mutator(state);
       if (result === undefined) return undefined;
+      if (result.nextState === undefined) return result.value;
       await persistState(dataPath, result.nextState);
       state = result.nextState;
       return result.value;
@@ -292,6 +418,8 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
     writing = nextPromise.catch(() => {});
     return nextPromise;
   }
+
+  const mutateUsers = mutateState;
 
   return createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
@@ -427,6 +555,144 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         return;
       }
       send(res, 200, JSON.stringify({ ok: true }), undefined, headers);
+      return;
+    }
+
+    if ((url.pathname === "/v1/tasks" || url.pathname.startsWith("/v1/tasks/")) && req.method === "OPTIONS") {
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      send(res, 204, "", "text/plain", { ...corsHeaders(req), "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS" });
+      return;
+    }
+
+    // REST task API (used by the Home Assistant integration and other
+    // automation). Scoping follows the sync API exactly: the admin token
+    // sees everything; a personal token sees its own tasks plus tasks
+    // shared with it, and new tasks are stamped with that user as owner.
+    const taskItemMatch = /^\/v1\/tasks\/([^/]+)$/.exec(url.pathname);
+    if (url.pathname === "/v1/tasks" || taskItemMatch) {
+      const isCollection = url.pathname === "/v1/tasks";
+      const handled = isCollection ? req.method === "GET" || req.method === "POST" : req.method === "PATCH" || req.method === "DELETE";
+      if (!handled) {
+        send(res, 404, JSON.stringify({ error: "Not found" }));
+        return;
+      }
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      const headers = corsHeaders(req);
+      const auth = authenticate(state, configuredToken, req.headers.authorization);
+      if (!auth) {
+        send(res, 401, JSON.stringify({ error: "Unauthorized" }), undefined, headers);
+        return;
+      }
+
+      if (isCollection && req.method === "GET") {
+        const tasks = state.tasks.filter((task) => taskVisibleForRest(task, auth));
+        send(res, 200, JSON.stringify({ tasks }), undefined, headers);
+        return;
+      }
+
+      let parsed;
+      if (isCollection || req.method === "PATCH") {
+        let rawBody = "";
+        try {
+          rawBody = await readBody(req, maxBody);
+        } catch (error) {
+          req.resume();
+          const status = error?.statusCode === 413 ? 413 : 400;
+          send(res, status, JSON.stringify({ error: status === 413 ? "Request body too large" : "Invalid request" }), undefined, headers);
+          return;
+        }
+        try {
+          parsed = JSON.parse(rawBody);
+        } catch {
+          send(res, 400, JSON.stringify({ error: "Invalid JSON" }), undefined, headers);
+          return;
+        }
+      }
+
+      if (isCollection && req.method === "POST") {
+        const built = restTaskFromBody(parsed, auth.kind === "admin" ? null : auth.user.id);
+        if (built.error) {
+          send(res, 400, JSON.stringify({ error: built.error }), undefined, headers);
+          return;
+        }
+        try {
+          // New tasks go first, like the Web client's addTask.
+          await mutateState((current) => ({
+            nextState: { ...current, revision: current.revision + 1, tasks: [built.task, ...current.tasks] },
+            value: built.task,
+          }));
+        } catch {
+          send(res, 500, JSON.stringify({ error: "Failed to persist state" }), undefined, headers);
+          return;
+        }
+        send(res, 201, JSON.stringify(built.task), undefined, headers);
+        return;
+      }
+
+      const targetId = decodeURIComponent(taskItemMatch[1]);
+
+      if (req.method === "PATCH") {
+        const built = restPatchFromBody(parsed);
+        if (built.error) {
+          send(res, 400, JSON.stringify({ error: built.error }), undefined, headers);
+          return;
+        }
+        let outcome;
+        try {
+          outcome = await mutateState((current) => {
+            const index = current.tasks.findIndex((task) => task?.id === targetId);
+            const stored = index >= 0 ? current.tasks[index] : undefined;
+            if (!taskVisibleForRest(stored, auth)) return { value: { status: 404 } };
+            const updated = applyRestPatch(stored, built.patch);
+            const tasks = [...current.tasks];
+            tasks[index] = updated;
+            return { nextState: { ...current, revision: current.revision + 1, tasks }, value: { status: 200, task: updated } };
+          });
+        } catch {
+          send(res, 500, JSON.stringify({ error: "Failed to persist state" }), undefined, headers);
+          return;
+        }
+        if (outcome.status === 404) {
+          send(res, 404, JSON.stringify({ error: "Task not found" }), undefined, headers);
+          return;
+        }
+        send(res, 200, JSON.stringify(outcome.task), undefined, headers);
+        return;
+      }
+
+      // DELETE: tombstone like a client delete. Only the owner or the
+      // admin may delete; a user the task is shared with gets 403.
+      let outcome;
+      try {
+        outcome = await mutateState((current) => {
+          const index = current.tasks.findIndex((task) => task?.id === targetId);
+          const stored = index >= 0 ? current.tasks[index] : undefined;
+          if (!taskVisibleForRest(stored, auth)) return { value: { status: 404 } };
+          if (auth.kind !== "admin" && taskOwnerId(stored) !== auth.user.id) return { value: { status: 403 } };
+          const tombstone = { ...stored, deleted: true, updatedAt: new Date().toISOString() };
+          const tasks = [...current.tasks];
+          tasks[index] = tombstone;
+          return { nextState: { ...current, revision: current.revision + 1, tasks }, value: { status: 200, task: tombstone } };
+        });
+      } catch {
+        send(res, 500, JSON.stringify({ error: "Failed to persist state" }), undefined, headers);
+        return;
+      }
+      if (outcome.status === 404) {
+        send(res, 404, JSON.stringify({ error: "Task not found" }), undefined, headers);
+        return;
+      }
+      if (outcome.status === 403) {
+        send(res, 403, JSON.stringify({ error: "Only the owner can delete this task" }), undefined, headers);
+        return;
+      }
+      send(res, 200, JSON.stringify(outcome.task), undefined, headers);
       return;
     }
 

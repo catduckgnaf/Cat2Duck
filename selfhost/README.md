@@ -112,6 +112,64 @@ Users connect from the Web UI with the server address and their personal
 token, exactly like the admin flow. Per-user sign-in in the Android app is
 not included; Android keeps using the admin token.
 
+## REST task API
+
+A small task-level API sits beside the sync API, for automation — it is
+what the [Home Assistant integration](../integrations/home-assistant/)
+uses. Authentication and scoping follow the rules above exactly: send
+`Authorization: Bearer <token>` with either the admin `CADENCE_TOKEN`
+(sees and can change everything, new tasks are unowned) or a registered
+user's personal token (sees their own tasks plus tasks shared with them;
+new tasks are stamped with that user as owner).
+
+| Method | Path | Success | Notes |
+| --- | --- | --- | --- |
+| `GET` | `/v1/tasks` | `200 {"tasks": [...]}` | The caller's visible tasks, deleted ones excluded. Full task objects, as stored. |
+| `POST` | `/v1/tasks` | `201` + the created task | Body: `{"title": "…"}` (required) plus optional `date` (`YYYY-MM-DD` or `null`), `notes`, `categoryId`, `projectId`, `repeat`. The server assigns the id and timestamps. |
+| `PATCH` | `/v1/tasks/:id` | `200` + the updated task | Body may carry `title`, `date`, `notes`, `done`, `categoryId`, `projectId`. Setting `done` stamps or clears `completedAt`, like checking a toduck off. Owner and sharing cannot be changed here. |
+| `DELETE` | `/v1/tasks/:id` | `200` + the deleted task | Tombstones the task, like a client delete. Owner or admin only — a user the task is shared with gets `403`. |
+
+Errors: `400` for invalid JSON, a missing/empty `title`, or a malformed
+field; `401` for a missing or unknown token; `404` when the task does not
+exist or is not visible to the caller.
+
+```sh
+# Create a toduck
+curl -i -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"title":"Book the dentist","date":"2026-10-30"}' \
+  http://localhost:8793/v1/tasks
+
+# List the caller's toducks
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8793/v1/tasks
+
+# Mark one done (or patch any of title/date/notes/categoryId/projectId)
+curl -X PATCH \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"done":true}' \
+  http://localhost:8793/v1/tasks/<task-id>
+
+# Delete one (owner or admin)
+curl -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8793/v1/tasks/<task-id>
+```
+
+From Home Assistant, the same endpoints work as a `rest_command` — handy
+for automations that should file a toduck (the custom integration's todo
+entity can also create items; see its README):
+
+```yaml
+rest_command:
+  toduck_add:
+    url: "http://<server>:8793/v1/tasks"
+    method: POST
+    headers:
+      authorization: "Bearer <personal-token>"
+      content-type: "application/json"
+    payload: '{"title": "{{ title }}"}'
+```
+
 ## Data and recovery
 
 The container stores state at `/data/state.json` and retains `/data/state.json.bak` as the last known good copy. Writes use a temporary file followed by an atomic rename. On startup, an invalid primary file is restored from the backup when possible. The runtime server is a Go binary; the Node implementation remains in this directory as the behavioral reference and its tests remain part of `npm test`.
