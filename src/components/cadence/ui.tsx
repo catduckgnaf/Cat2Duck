@@ -15,6 +15,7 @@ import {
   todayKey,
   upcomingWeekend,
   type Category,
+  type Project,
   type Repeat,
 } from "@/lib/cadence/model";
 
@@ -316,6 +317,56 @@ export function CategoryPicker({
           onChange={(event) => setDraft(event.target.value)}
           placeholder="New category"
           aria-label="New category"
+          maxLength={40}
+        />
+        <Button type="submit" variant="primary" disabled={!draft.trim()}>
+          Add
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+export function ProjectPicker({
+  projectId,
+  projects,
+  onChange,
+  onCreate,
+}: {
+  projectId: string | null;
+  projects: Project[];
+  onChange: (id: string | null) => void;
+  onCreate: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2">
+        <Chip active={projectId === null} onClick={() => onChange(null)}>
+          None
+        </Chip>
+        {projects.map((project) => (
+          <Chip key={project.id} active={projectId === project.id} onClick={() => onChange(project.id)}>
+            {project.name}
+          </Chip>
+        ))}
+      </div>
+      <form
+        className="mt-3 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const name = draft.trim();
+          if (!name) return;
+          onCreate(name);
+          setDraft("");
+        }}
+      >
+        <input
+          className="field"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="New project"
+          aria-label="New project"
           maxLength={40}
         />
         <Button type="submit" variant="primary" disabled={!draft.trim()}>

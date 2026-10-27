@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button, Modal, SectionLabel } from "@/components/cadence/ui";
-import { activeCategories } from "@/lib/cadence/model";
+import { activeCategories, activeProjects } from "@/lib/cadence/model";
 import { useCadence } from "@/lib/cadence/store";
 import { checkServer, normalizeServerUrl, readDoc } from "@/lib/cadence/sync";
 import { syncNow } from "@/lib/cadence/store";
@@ -21,7 +21,7 @@ export function CategoriesDialog({ onClose }: { onClose: () => void }) {
         if (!open) onClose();
       }}
       title="Categories"
-      description="A task sits in one category. Filter the list with the chips under search."
+      description="A toduck sits in one category. Filter the list with the chips in the sidebar."
     >
       <ul className="space-y-2">
         {items.map((category) => (
@@ -47,6 +47,57 @@ export function CategoriesDialog({ onClose }: { onClose: () => void }) {
           onChange={(event) => setDraft(event.target.value)}
           placeholder="New category"
           aria-label="New category"
+          maxLength={40}
+        />
+        <Button type="submit" variant="primary" disabled={!draft.trim()}>
+          Add
+        </Button>
+      </form>
+    </Modal>
+  );
+}
+
+export function ProjectsDialog({ onClose }: { onClose: () => void }) {
+  const projects = useCadence((s) => s.projects);
+  const addProject = useCadence((s) => s.addProject);
+  const renameProject = useCadence((s) => s.renameProject);
+  const deleteProject = useCadence((s) => s.deleteProject);
+  const [draft, setDraft] = useState("");
+  const items = activeProjects(projects);
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      title="Projects"
+      description="A toduck can belong to one project, alongside its category. Removing a project keeps its toducks."
+    >
+      <ul className="space-y-2">
+        {items.map((project) => (
+          <CategoryRow
+            key={project.id}
+            name={project.name}
+            onRename={(name) => renameProject(project.id, name)}
+            onDelete={() => deleteProject(project.id)}
+          />
+        ))}
+      </ul>
+      {items.length === 0 ? <p className="text-sm text-muted">No projects yet.</p> : null}
+      <form
+        className="mt-4 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (addProject(draft)) setDraft("");
+        }}
+      >
+        <input
+          className="field"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="New project"
+          aria-label="New project"
           maxLength={40}
         />
         <Button type="submit" variant="primary" disabled={!draft.trim()}>
@@ -93,6 +144,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const clearDone = useCadence((s) => s.clearDone);
   const tasks = useCadence((s) => s.tasks);
   const categories = useCadence((s) => s.categories);
+  const projects = useCadence((s) => s.projects);
   const [url, setUrl] = useState(serverUrl);
   const [token, setToken] = useState(serverToken);
   const [message, setMessage] = useState<string | null>(null);
@@ -107,14 +159,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setServer(next, token.trim());
     setUrl(next);
     if (!next || !token.trim()) {
-      setMessage("Server cleared. Tasks stay on this device.");
+      setMessage("Server cleared. Toducks stay on this device.");
       return;
     }
     setMessage("Checking the server…");
     try {
       await checkServer(next, token.trim());
       await syncNow();
-      setMessage("Connected. Notes, categories, and tasks will stay in sync.");
+      setMessage("Connected. Notes, categories, projects, and toducks will stay in sync.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not reach the server.");
     }
@@ -127,6 +179,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {
             tasks: tasks.filter((task) => !task.deleted),
             categories: categories.filter((category) => !category.deleted),
+            projects: projects.filter((project) => !project.deleted),
           },
           null,
           2,
@@ -188,7 +241,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               setServer("", "");
               setUrl("");
               setToken("");
-              setMessage("Disconnected. Local tasks were not changed.");
+              setMessage("Disconnected. Local toducks were not changed.");
             }}
           >
             Disconnect
