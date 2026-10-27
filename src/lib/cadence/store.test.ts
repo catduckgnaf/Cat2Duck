@@ -186,6 +186,66 @@ test("projects mirror categories: create, dedupe, rename, assign, delete clears 
   assert.equal(state().projects[0]?.deleted, true);
 });
 
+test("new tasks start unowned and unshared; setTaskSharing updates the share list", () => {
+  resetState();
+  const state = () => useCadence.getState();
+  state().addTask({
+    title: "Shareable",
+    notes: "",
+    categoryId: null,
+    projectId: null,
+    date: "2026-09-28",
+    repeat: { kind: "none" },
+  });
+  const task = state().tasks[0]!;
+  assert.equal(task.ownerId, null);
+  assert.deepEqual(task.sharedWith, []);
+
+  state().setTaskSharing(task.id, ["user-1", "user-2", "user-1"]);
+  assert.deepEqual(state().tasks[0]?.sharedWith, ["user-1", "user-2"]);
+  state().setTaskSharing(task.id, []);
+  assert.deepEqual(state().tasks[0]?.sharedWith, []);
+
+  // The sharing fields survive the persisted (partialized) shape.
+  state().setTaskSharing(task.id, ["user-1"]);
+  const options = useCadence.persist.getOptions();
+  const persisted = options.partialize?.(state()) as { tasks: Array<{ ownerId: string | null; sharedWith: string[] }> };
+  assert.deepEqual(persisted.tasks[0]?.sharedWith, ["user-1"]);
+  assert.equal(persisted.tasks[0]?.ownerId, null);
+});
+
+test("migrating a v4 payload adds a null ownerId and an empty sharedWith", () => {
+  const options = useCadence.persist.getOptions();
+  assert.equal(options.version, 5);
+  const migrate = options.migrate as unknown as (state: unknown, version: number) => {
+    tasks: Array<{ ownerId: string | null; sharedWith: string[] }>;
+  };
+  const migrated = migrate(
+    {
+      tasks: [
+        {
+          id: "old",
+          title: "Old task",
+          notes: "",
+          categoryId: null,
+          projectId: null,
+          date: null,
+          repeat: { kind: "none" },
+          done: false,
+          completedAt: null,
+          createdAt: "a",
+          updatedAt: "a",
+        },
+      ],
+      categories: [],
+      projects: [],
+    },
+    4,
+  );
+  assert.equal(migrated.tasks[0]?.ownerId, null);
+  assert.deepEqual(migrated.tasks[0]?.sharedWith, []);
+});
+
 test("migrating a v3 payload adds empty projects and a null projectId", () => {
   const options = useCadence.persist.getOptions();
   const migrate = options.migrate as unknown as (state: unknown, version: number) => {

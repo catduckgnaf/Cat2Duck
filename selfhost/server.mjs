@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,7 +24,17 @@ export function validateToken(raw) {
 }
 
 function emptyState() {
-  return { revision: 0, tasks: [], categories: [], projects: [] };
+  return { revision: 0, tasks: [], categories: [], projects: [], users: [] };
+}
+
+function isUserRecord(value) {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.tokenHash === "string"
+  );
 }
 
 function normalizeState(value) {
@@ -33,11 +43,107 @@ function normalizeState(value) {
   // Projects are optional: state files and clients from before projects
   // existed have no projects array, which reads as an empty one.
   if (value.projects !== undefined && !Array.isArray(value.projects)) throw new Error("State projects must be an array when present.");
+  // Users are optional for the same reason: older state files have none.
+  if (value.users !== undefined && (!Array.isArray(value.users) || !value.users.every(isUserRecord))) {
+    throw new Error("State users must be an array of user records when present.");
+  }
   return {
     revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     tasks: value.tasks,
     categories: value.categories,
     projects: value.projects ?? [],
+    users: value.users ?? [],
+  };
+}
+
+export function hashToken(token) {
+  return createHash("sha256").update(String(token)).digest("hex");
+}
+
+/** Names and ids only — never token hashes. */
+function publicUsers(state) {
+  return state.users.map((user) => ({ id: user.id, name: user.name }));
+}
+
+function taskOwnerId(task) {
+  return typeof task?.ownerId === "string" ? task.ownerId : null;
+}
+
+function taskSharedWith(task) {
+  return Array.isArray(task?.sharedWith) ? task.sharedWith.filter((id) => typeof id === "string") : [];
+}
+
+function visibleToUser(task, userId) {
+  return taskOwnerId(task) === userId || taskSharedWith(task).includes(userId);
+}
+
+/** Keep only ids of registered users, de-duplicated. */
+function sanitizeSharedWith(value, state) {
+  const known = new Set(state.users.map((user) => user.id));
+  return [...new Set(taskSharedWith({ sharedWith: value }))].filter((id) => known.has(id));
+}
+
+/**
+ * Merge a user token's PUT into the stored state. The requester only ever
+ * sees tasks they own or that are shared with them, so:
+ * - tasks they cannot see are preserved exactly as stored;
+ * - a task they own that is missing from the payload is deleted;
+ * - a shared task missing from the payload is left untouched (only the
+ *   owner can delete it);
+ * - ownerId is stamped from the stored task (or the requester for new
+ *   tasks) — a client can never forge or move ownership;
+ * - sharedWith changes only for tasks the requester owns.
+ */
+function mergeUserState(state, parsed, userId) {
+  const incomingById = new Map();
+  for (const task of parsed.tasks) {
+    if (task && typeof task.id === "string" && !incomingById.has(task.id)) incomingById.set(task.id, task);
+  }
+  const storedIds = new Set(state.tasks.map((task) => task?.id));
+  const handled = new Set();
+  const tasks = [];
+  for (const stored of state.tasks) {
+    const incoming = incomingById.get(stored?.id);
+    if (!visibleToUser(stored, userId)) {
+      if (incoming) handled.add(stored.id);
+      tasks.push(stored);
+      continue;
+    }
+    if (!incoming) {
+      // Own task omitted from the payload: deleted. Shared task omitted:
+      // not the requester's to delete, keep it.
+      if (taskOwnerId(stored) !== userId) tasks.push(stored);
+      continue;
+    }
+    handled.add(stored.id);
+    const isOwner = taskOwnerId(stored) === userId;
+    // A shared user cannot delete the owner's task: a tombstone from them
+    // is ignored (the Web client deletes by tombstone, not by omission).
+    if (!isOwner && incoming.deleted && !stored.deleted) {
+      tasks.push(stored);
+      continue;
+    }
+    tasks.push({
+      ...incoming,
+      ownerId: taskOwnerId(stored),
+      sharedWith: isOwner
+        ? incoming.sharedWith === undefined
+          ? taskSharedWith(stored)
+          : sanitizeSharedWith(incoming.sharedWith, state)
+        : taskSharedWith(stored),
+    });
+  }
+  for (const incoming of parsed.tasks) {
+    if (!incoming || typeof incoming.id !== "string" || handled.has(incoming.id) || storedIds.has(incoming.id)) continue;
+    handled.add(incoming.id);
+    tasks.push({ ...incoming, ownerId: userId, sharedWith: sanitizeSharedWith(incoming.sharedWith, state) });
+  }
+  return {
+    revision: state.revision + 1,
+    tasks,
+    categories: parsed.categories,
+    projects: parsed.projects ?? state.projects,
+    users: state.users,
   };
 }
 
@@ -86,6 +192,28 @@ function tokenMatches(expected, authorization) {
   const expectedDigest = createHash("sha256").update(expected).digest();
   const suppliedDigest = createHash("sha256").update(supplied).digest();
   return timingSafeEqual(expectedDigest, suppliedDigest);
+}
+
+function bearerToken(authorization) {
+  return String(authorization || "").replace(/^Bearer\s+/i, "");
+}
+
+/**
+ * Resolve a request's credential: the CADENCE_TOKEN is the admin (full,
+ * legacy access); a registered user's personal token scopes state access
+ * to that user. Returns null when neither matches.
+ */
+function authenticate(state, configuredToken, authorization) {
+  if (tokenMatches(configuredToken, authorization)) return { kind: "admin" };
+  const suppliedHash = hashToken(bearerToken(authorization));
+  const suppliedDigest = Buffer.from(suppliedHash, "utf8");
+  for (const user of state.users) {
+    const storedDigest = Buffer.from(user.tokenHash, "utf8");
+    if (storedDigest.length === suppliedDigest.length && timingSafeEqual(storedDigest, suppliedDigest)) {
+      return { kind: "user", user };
+    }
+  }
+  return null;
 }
 
 function readBody(req, maxBody) {
@@ -152,8 +280,155 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
     return true;
   }
 
+  /** Serialize a users mutation through the same write queue as state PUTs. */
+  function mutateUsers(mutator) {
+    const nextPromise = writing.catch(() => {}).then(async () => {
+      const result = mutator(state);
+      if (result === undefined) return undefined;
+      await persistState(dataPath, result.nextState);
+      state = result.nextState;
+      return result.value;
+    });
+    writing = nextPromise.catch(() => {});
+    return nextPromise;
+  }
+
   return createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+
+    if ((url.pathname === "/v1/users" || url.pathname.startsWith("/v1/users/") || url.pathname === "/v1/me") && req.method === "OPTIONS") {
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      send(res, 204, "", "text/plain", { ...corsHeaders(req), "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS" });
+      return;
+    }
+
+    if (url.pathname === "/v1/me" && req.method === "GET") {
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      const headers = corsHeaders(req);
+      const auth = authenticate(state, configuredToken, req.headers.authorization);
+      if (!auth) {
+        send(res, 401, JSON.stringify({ error: "Unauthorized" }), undefined, headers);
+        return;
+      }
+      send(res, 200, JSON.stringify(auth.kind === "admin" ? { kind: "admin" } : { kind: "user", id: auth.user.id, name: auth.user.name }), undefined, headers);
+      return;
+    }
+
+    if (url.pathname === "/v1/users" && req.method === "GET") {
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      const headers = corsHeaders(req);
+      const auth = authenticate(state, configuredToken, req.headers.authorization);
+      if (!auth) {
+        send(res, 401, JSON.stringify({ error: "Unauthorized" }), undefined, headers);
+        return;
+      }
+      send(res, 200, JSON.stringify(publicUsers(state)), undefined, headers);
+      return;
+    }
+
+    if (url.pathname === "/v1/users" && req.method === "POST") {
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      const headers = corsHeaders(req);
+      const auth = authenticate(state, configuredToken, req.headers.authorization);
+      if (!auth) {
+        send(res, 401, JSON.stringify({ error: "Unauthorized" }), undefined, headers);
+        return;
+      }
+      if (auth.kind !== "admin") {
+        send(res, 403, JSON.stringify({ error: "Only the admin can create users" }), undefined, headers);
+        return;
+      }
+      let rawBody = "";
+      try {
+        rawBody = await readBody(req, maxBody);
+      } catch (error) {
+        req.resume();
+        const status = error?.statusCode === 413 ? 413 : 400;
+        send(res, status, JSON.stringify({ error: status === 413 ? "Request body too large" : "Invalid request" }), undefined, headers);
+        return;
+      }
+      let name = "";
+      try {
+        name = String(JSON.parse(rawBody)?.name ?? "").trim().slice(0, 80);
+      } catch {
+        send(res, 400, JSON.stringify({ error: "Invalid JSON" }), undefined, headers);
+        return;
+      }
+      if (!name) {
+        send(res, 400, JSON.stringify({ error: "A user name is required" }), undefined, headers);
+        return;
+      }
+      // The raw personal token is returned once, here; only its SHA-256
+      // hash is ever stored.
+      const personalToken = randomBytes(32).toString("base64url");
+      const record = { id: randomUUID(), name, tokenHash: hashToken(personalToken) };
+      try {
+        await mutateUsers((current) => ({ nextState: { ...current, users: [...current.users, record] }, value: record }));
+      } catch {
+        send(res, 500, JSON.stringify({ error: "Failed to persist state" }), undefined, headers);
+        return;
+      }
+      send(res, 201, JSON.stringify({ id: record.id, name: record.name, token: personalToken }), undefined, headers);
+      return;
+    }
+
+    const userDeleteMatch = /^\/v1\/users\/([^/]+)$/.exec(url.pathname);
+    if (userDeleteMatch && req.method === "DELETE") {
+      if (!originAllowed(req)) {
+        send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
+        return;
+      }
+      const headers = corsHeaders(req);
+      const auth = authenticate(state, configuredToken, req.headers.authorization);
+      if (!auth) {
+        send(res, 401, JSON.stringify({ error: "Unauthorized" }), undefined, headers);
+        return;
+      }
+      if (auth.kind !== "admin") {
+        send(res, 403, JSON.stringify({ error: "Only the admin can delete users" }), undefined, headers);
+        return;
+      }
+      const targetId = decodeURIComponent(userDeleteMatch[1]);
+      try {
+        const removed = await mutateUsers((current) => {
+          if (!current.users.some((user) => user.id === targetId)) return undefined;
+          return {
+            nextState: {
+              ...current,
+              users: current.users.filter((user) => user.id !== targetId),
+              // Revoking a user also unshares everything shared with them.
+              tasks: current.tasks.map((task) =>
+                taskSharedWith(task).includes(targetId)
+                  ? { ...task, sharedWith: taskSharedWith(task).filter((id) => id !== targetId) }
+                  : task,
+              ),
+            },
+            value: true,
+          };
+        });
+        if (!removed) {
+          send(res, 404, JSON.stringify({ error: "User not found" }), undefined, headers);
+          return;
+        }
+      } catch {
+        send(res, 500, JSON.stringify({ error: "Failed to persist state" }), undefined, headers);
+        return;
+      }
+      send(res, 200, JSON.stringify({ ok: true }), undefined, headers);
+      return;
+    }
 
     if (url.pathname === "/health" && req.method === "OPTIONS") {
       if (!originAllowed(req)) {
@@ -188,12 +463,17 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         return;
       }
       const headers = corsHeaders(req);
-      if (!tokenMatches(configuredToken, req.headers.authorization)) {
+      const auth = authenticate(state, configuredToken, req.headers.authorization);
+      if (!auth) {
         send(res, 401, JSON.stringify({ error: "Unauthorized" }), undefined, headers);
         return;
       }
       if (req.method === "GET") {
-        send(res, 200, JSON.stringify({ tasks: state.tasks, categories: state.categories, projects: state.projects }), undefined, { ...headers, ETag: etag(state.revision) });
+        // A personal token sees categories, projects, and only the tasks
+        // they own or that are shared with them. Unowned legacy tasks are
+        // the admin's and are not visible to user tokens.
+        const tasks = auth.kind === "admin" ? state.tasks : state.tasks.filter((task) => visibleToUser(task, auth.user.id));
+        send(res, 200, JSON.stringify({ tasks, categories: state.categories, projects: state.projects }), undefined, { ...headers, ETag: etag(state.revision) });
         return;
       }
 
@@ -243,12 +523,18 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         }
         // A client that predates projects (e.g. the Android app) omits the
         // array; keep the stored projects instead of wiping them.
-        const nextState = {
-          revision: state.revision + 1,
-          tasks: parsed.tasks,
-          categories: parsed.categories,
-          projects: parsed.projects ?? state.projects,
-        };
+        // The admin token keeps whole-state semantics; a personal token's
+        // payload is merged in scoped to that user (see mergeUserState).
+        const nextState =
+          auth.kind === "admin"
+            ? {
+                revision: state.revision + 1,
+                tasks: parsed.tasks,
+                categories: parsed.categories,
+                projects: parsed.projects ?? state.projects,
+                users: state.users,
+              }
+            : mergeUserState(state, parsed, auth.user.id);
         await persistState(dataPath, nextState);
         state = nextState;
         return nextState.revision;

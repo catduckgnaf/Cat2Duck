@@ -161,6 +161,225 @@ test("invalid primary state recovers from the last known good backup", async () 
   assert.deepEqual(JSON.parse(await readFile(dataPath, "utf8")), state);
 });
 
+const stamp = "2026-09-28T00:00:00.000Z";
+function makeTask(id, title, extra = {}) {
+  return {
+    id,
+    title,
+    notes: "",
+    categoryId: null,
+    projectId: null,
+    date: null,
+    repeat: { kind: "none" },
+    done: false,
+    completedAt: null,
+    createdAt: stamp,
+    updatedAt: stamp,
+    ownerId: null,
+    sharedWith: [],
+    ...extra,
+  };
+}
+
+function bearer(token) {
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function putState(url, token, revision, body) {
+  return fetch(`${url}/v1/state`, {
+    method: "PUT",
+    headers: { ...bearer(token), "Content-Type": "application/json", "If-Match": `"${revision}"` },
+    body: JSON.stringify(body),
+  });
+}
+
+async function getState(url, token) {
+  const response = await fetch(`${url}/v1/state`, { headers: bearer(token) });
+  assert.equal(response.status, 200);
+  return { body: await response.json(), revision: Number(response.headers.get("etag").replaceAll('"', "")) };
+}
+
+async function createUser(url, name) {
+  const response = await fetch(`${url}/v1/users`, {
+    method: "POST",
+    headers: { ...auth(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  assert.equal(response.status, 201);
+  return response.json();
+}
+
+test("admin creates users; only the token hash is stored and the raw token is shown once", async () => {
+  await withServer(async ({ url, dataPath }) => {
+    const created = await createUser(url, "Teammate");
+    assert.equal(created.name, "Teammate");
+    assert.ok(created.id);
+    assert.ok(created.token.length >= 32);
+
+    const onDisk = await readFile(dataPath, "utf8");
+    assert.ok(!onDisk.includes(created.token), "raw personal token must never be persisted");
+    const stored = JSON.parse(onDisk);
+    assert.equal(stored.users.length, 1);
+    assert.equal(stored.users[0].id, created.id);
+    assert.match(stored.users[0].tokenHash, /^[0-9a-f]{64}$/);
+
+    // The directory lists names/ids only, for any authenticated caller.
+    const asUser = await fetch(`${url}/v1/users`, { headers: bearer(created.token) });
+    assert.equal(asUser.status, 200);
+    assert.deepEqual(await asUser.json(), [{ id: created.id, name: "Teammate" }]);
+    assert.equal((await fetch(`${url}/v1/users`)).status, 401);
+
+    // A user token cannot create users; /v1/me reports who a token is.
+    const forbidden = await fetch(`${url}/v1/users`, {
+      method: "POST",
+      headers: { ...bearer(created.token), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Nope" }),
+    });
+    assert.equal(forbidden.status, 403);
+    assert.deepEqual(await (await fetch(`${url}/v1/me`, { headers: bearer(created.token) })).json(), {
+      kind: "user",
+      id: created.id,
+      name: "Teammate",
+    });
+    assert.deepEqual(await (await fetch(`${url}/v1/me`, { headers: auth() })).json(), { kind: "admin" });
+  });
+});
+
+test("user tokens see only their own and shared tasks; legacy tasks stay the admin's", async () => {
+  await withServer(async ({ url }) => {
+    const alice = await createUser(url, "Alice");
+    const bob = await createUser(url, "Bob");
+    let revision = 0;
+    // Alice creates a private task through scoped sync (forged owner ignored).
+    let res = await putState(url, alice.token, revision, {
+      tasks: [makeTask("a1", "Alice private", { ownerId: bob.id })],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+    revision = 1;
+    // Bob creates his own task.
+    res = await putState(url, bob.token, revision, { tasks: [makeTask("b1", "Bob private")], categories: [], projects: [] });
+    assert.equal(res.status, 200);
+    revision = 2;
+    // Admin adds a legacy unowned task.
+    res = await putState(url, TOKEN, revision, {
+      tasks: [makeTask("a1", "Alice private", { ownerId: alice.id }), makeTask("b1", "Bob private", { ownerId: bob.id }), makeTask("legacy", "Legacy")],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+
+    const adminView = await getState(url, TOKEN);
+    assert.deepEqual(adminView.body.tasks.map((t) => t.id).sort(), ["a1", "b1", "legacy"]);
+    assert.equal(adminView.body.tasks.find((t) => t.id === "a1").ownerId, alice.id);
+
+    const aliceView = await getState(url, alice.token);
+    assert.deepEqual(aliceView.body.tasks.map((t) => t.id), ["a1"]);
+    const bobView = await getState(url, bob.token);
+    assert.deepEqual(bobView.body.tasks.map((t) => t.id), ["b1"]);
+  });
+});
+
+test("sharing makes a task visible and editable by the other user, who cannot delete, re-own, or re-share it", async () => {
+  await withServer(async ({ url }) => {
+    const alice = await createUser(url, "Alice");
+    const bob = await createUser(url, "Bob");
+    // Alice owns a1 and shares it with Bob.
+    let res = await putState(url, alice.token, 0, {
+      tasks: [makeTask("a1", "Shared chore", { sharedWith: [bob.id] })],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+
+    const bobView = await getState(url, bob.token);
+    assert.deepEqual(bobView.body.tasks.map((t) => t.id), ["a1"]);
+
+    // Bob edits the shared task's title but tries to steal ownership,
+    // re-share it to nobody, and also sends Alice an unrelated forgery.
+    res = await putState(url, bob.token, bobView.revision, {
+      tasks: [makeTask("a1", "Shared chore, done by Bob", { ownerId: bob.id, sharedWith: [], done: true })],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+    let adminView = await getState(url, TOKEN);
+    const shared = adminView.body.tasks.find((t) => t.id === "a1");
+    assert.equal(shared.title, "Shared chore, done by Bob");
+    assert.equal(shared.done, true);
+    assert.equal(shared.ownerId, alice.id);
+    assert.deepEqual(shared.sharedWith, [bob.id]);
+
+    // A tombstone from Bob (how the Web client deletes) is also ignored.
+    res = await putState(url, bob.token, adminView.revision, {
+      tasks: [makeTask("a1", "Shared chore, done by Bob", { ownerId: alice.id, sharedWith: [bob.id], done: true, deleted: true })],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+    adminView = await getState(url, TOKEN);
+    assert.equal(adminView.body.tasks.find((t) => t.id === "a1").deleted, undefined);
+
+    // Bob's PUT omitting the shared task leaves it untouched.
+    res = await putState(url, bob.token, adminView.revision, { tasks: [], categories: [], projects: [] });
+    assert.equal(res.status, 200);
+    adminView = await getState(url, TOKEN);
+    assert.deepEqual(adminView.body.tasks.map((t) => t.id), ["a1"]);
+
+    // Alice's PUT omitting her own task deletes it.
+    const aliceView = await getState(url, alice.token);
+    res = await putState(url, alice.token, aliceView.revision, { tasks: [], categories: [], projects: [] });
+    assert.equal(res.status, 200);
+    adminView = await getState(url, TOKEN);
+    assert.deepEqual(adminView.body.tasks, []);
+  });
+});
+
+test("a user PUT preserves other users' tasks exactly, and a deleted user loses access and shares", async () => {
+  await withServer(async ({ url }) => {
+    const alice = await createUser(url, "Alice");
+    const bob = await createUser(url, "Bob");
+    const bobTask = makeTask("b1", "Bob's exact task", { notes: "keep me byte-for-byte", sharedWith: [alice.id] });
+    let res = await putState(url, bob.token, 0, { tasks: [bobTask], categories: [], projects: [] });
+    assert.equal(res.status, 200);
+
+    // Alice syncs (payload contains only what she can see, plus her own new task).
+    const aliceView = await getState(url, alice.token);
+    res = await putState(url, alice.token, aliceView.revision, {
+      tasks: [bobTask, makeTask("a1", "Alice task")],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+    const adminView = await getState(url, TOKEN);
+    assert.deepEqual(adminView.body.tasks.find((t) => t.id === "b1"), { ...bobTask, ownerId: bob.id });
+
+    // Deleting Bob revokes his token. (His own tasks stay stored for the
+    // admin; shares *to* him are stripped — covered by Carol below.)
+    const deleted = await fetch(`${url}/v1/users/${bob.id}`, { method: "DELETE", headers: auth() });
+    assert.equal(deleted.status, 200);
+    assert.equal((await fetch(`${url}/v1/state`, { headers: bearer(bob.token) })).status, 401);
+
+    // Alice shares one of her tasks with Carol; deleting Carol unshares it.
+    const carol = await createUser(url, "Carol");
+    const before = await getState(url, TOKEN);
+    res = await putState(url, TOKEN, before.revision, {
+      tasks: [...before.body.tasks, makeTask("a2", "Alice shares with Carol", { ownerId: alice.id, sharedWith: [carol.id] })],
+      categories: [],
+      projects: [],
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual((await getState(url, carol.token)).body.tasks.map((t) => t.id), ["a2"]);
+    const removedCarol = await fetch(`${url}/v1/users/${carol.id}`, { method: "DELETE", headers: auth() });
+    assert.equal(removedCarol.status, 200);
+    const finalView = await getState(url, TOKEN);
+    assert.deepEqual(finalView.body.tasks.find((t) => t.id === "a2").sharedWith, []);
+    assert.equal((await fetch(`${url}/v1/state`, { headers: bearer(carol.token) })).status, 401);
+    assert.equal((await fetch(`${url}/v1/users/${carol.id}`, { method: "DELETE", headers: auth() })).status, 404);
+  });
+});
+
 test("projects round-trip, and payloads without projects still work and do not wipe them", async () => {
   await withServer(async ({ url }) => {
     const project = { id: "p1", name: "House", createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" };

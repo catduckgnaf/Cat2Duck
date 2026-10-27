@@ -1,10 +1,151 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button, Modal, SectionLabel } from "@/components/cadence/ui";
 import { activeCategories, activeProjects } from "@/lib/cadence/model";
 import { useCadence } from "@/lib/cadence/store";
-import { checkServer, normalizeServerUrl, readDoc } from "@/lib/cadence/sync";
+import {
+  checkServer,
+  createUser,
+  deleteUser,
+  fetchMe,
+  listUsers,
+  normalizeServerUrl,
+  readDoc,
+  type DirectoryUser,
+} from "@/lib/cadence/sync";
 import { syncNow } from "@/lib/cadence/store";
+
+/**
+ * Admin-only panel: registered users on the connected server. Rendered
+ * only when the saved connection token turns out to be the admin token —
+ * a personal token never sees it.
+ */
+export function UsersPanel({ url, token }: { url: string; token: string }) {
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [users, setUsers] = useState<DirectoryUser[]>([]);
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState<{ name: string; token: string } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function refresh() {
+    try {
+      setUsers(await listUsers(url, token));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load users.");
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const me = await fetchMe(url, token);
+      if (cancelled) return;
+      setIsAdmin(me.kind === "admin");
+      if (me.kind === "admin") await refresh();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, token]);
+
+  if (!isAdmin) return null;
+
+  async function addUser() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      const user = await createUser(url, token, trimmed);
+      setCreated({ name: user.name, token: user.token });
+      setCopied(false);
+      setName("");
+      setMessage(null);
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create the user.");
+    }
+  }
+
+  async function removeUser(user: DirectoryUser) {
+    try {
+      await deleteUser(url, token, user.id);
+      setMessage(`${user.name} removed. Their access is revoked and toducks shared with them are unshared.`);
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not remove the user.");
+    }
+  }
+
+  return (
+    <section className="mt-6 border-t border-line pt-5">
+      <SectionLabel>Users on this server</SectionLabel>
+      <p className="mt-2 text-sm text-pretty text-muted">
+        You are connected with the admin token. Create a user for each person, then hand them their personal token to
+        connect with. People only see their own toducks and ones shared with them.
+      </p>
+      {users.length ? (
+        <ul className="mt-3 space-y-2">
+          {users.map((user) => (
+            <li key={user.id} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{user.name}</span>
+              <button
+                type="button"
+                className="grid size-11 shrink-0 place-items-center rounded-full text-danger"
+                aria-label={`Delete user ${user.name}`}
+                onClick={() => void removeUser(user)}
+              >
+                <Trash2 className="size-4" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-muted">No registered users yet.</p>
+      )}
+      <form
+        className="mt-3 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void addUser();
+        }}
+      >
+        <input
+          className="field"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="New user's name"
+          aria-label="New user's name"
+          maxLength={80}
+        />
+        <Button type="submit" variant="primary" disabled={!name.trim()}>
+          Create user
+        </Button>
+      </form>
+      {created ? (
+        <div className="mt-3 rounded-2xl bg-paper-2 px-4 py-3">
+          <p className="text-sm font-medium">Personal token for {created.name}</p>
+          <p className="mt-1 text-sm text-danger">Shown once — copy it now. It can't be shown again.</p>
+          <div className="mt-2 flex gap-2">
+            <input className="field" readOnly value={created.token} aria-label="New user token" onFocus={(event) => event.target.select()} />
+            <Button
+              onClick={() => {
+                void navigator.clipboard?.writeText(created.token).then(() => setCopied(true));
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {message ? (
+        <p className="mt-2 text-sm text-muted" role="status" aria-live="polite">
+          {message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 
 export function CategoriesDialog({ onClose }: { onClose: () => void }) {
   const categories = useCadence((s) => s.categories);
@@ -260,6 +401,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   ? `Sync failed: ${syncError ?? "Check the address, token, and server status."}`
                   : "Not connected.")}
         </p>
+        {serverUrl && serverToken ? <UsersPanel url={serverUrl} token={serverToken} /> : null}
       </section>
 
       <section className="mt-6 border-t border-line pt-5">

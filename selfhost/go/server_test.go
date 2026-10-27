@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -218,6 +219,276 @@ func readBody(res *http.Response) string {
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(res.Body)
 	return string(raw)
+}
+
+type createdUser struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}
+
+func doRequest(t *testing.T, method, target, token string, body string, headers map[string]string) *http.Response {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, target, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func createUserGo(t *testing.T, base, name string) createdUser {
+	t.Helper()
+	res := doRequest(t, http.MethodPost, base+"/v1/users", testToken, `{"name":"`+name+`"}`, nil)
+	defer res.Body.Close()
+	if res.StatusCode != 201 {
+		t.Fatalf("create user status %d", res.StatusCode)
+	}
+	var created createdUser
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func taskJSON(id, title, ownerID string, sharedWith []string) string {
+	owner := "null"
+	if ownerID != "" {
+		owner = `"` + ownerID + `"`
+	}
+	shared, _ := json.Marshal(sharedWith)
+	return `{"id":"` + id + `","title":"` + title + `","notes":"","categoryId":null,"projectId":null,"date":null,"repeat":{"kind":"none"},"done":false,"completedAt":null,"createdAt":"2026-09-28T00:00:00.000Z","updatedAt":"2026-09-28T00:00:00.000Z","ownerId":` + owner + `,"sharedWith":` + string(shared) + `}`
+}
+
+func putStateGo(t *testing.T, base, token string, revision int, body string) *http.Response {
+	t.Helper()
+	return doRequest(t, http.MethodPut, base+"/v1/state", token, body, map[string]string{"If-Match": `"` + strconv.Itoa(revision) + `"`})
+}
+
+func getStateGo(t *testing.T, base, token string) (map[string][]map[string]any, int) {
+	t.Helper()
+	res := doRequest(t, http.MethodGet, base+"/v1/state", token, "", nil)
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("get state status %d", res.StatusCode)
+	}
+	var body struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	revision, _ := strconv.Atoi(strings.Trim(res.Header.Get("ETag"), `"`))
+	out := map[string][]map[string]any{"tasks": body.Tasks}
+	return out, revision
+}
+
+func taskIDs(tasks []map[string]any) []string {
+	ids := []string{}
+	for _, task := range tasks {
+		ids = append(ids, task["id"].(string))
+	}
+	return ids
+}
+
+func TestAdminCreatesUsersHashOnlyStored(t *testing.T) {
+	server, dir := newTestServer(t)
+	defer server.Close()
+	created := createUserGo(t, server.URL, "Teammate")
+	if created.Name != "Teammate" || created.ID == "" || len(created.Token) < 32 {
+		t.Fatalf("bad created user %+v", created)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), created.Token) {
+		t.Fatal("raw personal token persisted")
+	}
+	var stored struct {
+		Users []userRecord `json:"users"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil || len(stored.Users) != 1 || len(stored.Users[0].TokenHash) != 64 {
+		t.Fatalf("stored users wrong: %v %+v", err, stored.Users)
+	}
+	directory := doRequest(t, http.MethodGet, server.URL+"/v1/users", created.Token, "", nil)
+	defer directory.Body.Close()
+	if directory.StatusCode != 200 {
+		t.Fatalf("directory status %d", directory.StatusCode)
+	}
+	var users []publicUser
+	json.NewDecoder(directory.Body).Decode(&users)
+	if len(users) != 1 || users[0].Name != "Teammate" || users[0].ID != created.ID {
+		t.Fatalf("directory %+v", users)
+	}
+	forbidden := doRequest(t, http.MethodPost, server.URL+"/v1/users", created.Token, `{"name":"Nope"}`, nil)
+	defer forbidden.Body.Close()
+	if forbidden.StatusCode != 403 {
+		t.Fatalf("user creating user status %d", forbidden.StatusCode)
+	}
+	me := doRequest(t, http.MethodGet, server.URL+"/v1/me", created.Token, "", nil)
+	defer me.Body.Close()
+	var identity map[string]string
+	json.NewDecoder(me.Body).Decode(&identity)
+	if identity["kind"] != "user" || identity["id"] != created.ID {
+		t.Fatalf("me %+v", identity)
+	}
+	adminMe := doRequest(t, http.MethodGet, server.URL+"/v1/me", testToken, "", nil)
+	defer adminMe.Body.Close()
+	json.NewDecoder(adminMe.Body).Decode(&identity)
+	if identity["kind"] != "admin" {
+		t.Fatalf("admin me %+v", identity)
+	}
+}
+
+func TestUserScopedVisibilityAndSharingRules(t *testing.T) {
+	server, _ := newTestServer(t)
+	defer server.Close()
+	alice := createUserGo(t, server.URL, "Alice")
+	bob := createUserGo(t, server.URL, "Bob")
+
+	// Alice creates a private task (forged owner ignored) and one shared with Bob.
+	res := putStateGo(t, server.URL, alice.Token, 0, `{"tasks":[`+taskJSON("a1", "Alice private", bob.ID, nil)+`,`+taskJSON("a2", "Shared chore", "", []string{bob.ID})+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("alice put %d", res.StatusCode)
+	}
+	// Bob creates his own task with a whole-state-style payload of just his tasks.
+	res = putStateGo(t, server.URL, bob.Token, 1, `{"tasks":[`+taskJSON("b1", "Bob private", "", nil)+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("bob put %d", res.StatusCode)
+	}
+	// Admin adds a legacy unowned task.
+	res = putStateGo(t, server.URL, testToken, 2, `{"tasks":[`+taskJSON("a1", "Alice private", alice.ID, nil)+`,`+taskJSON("a2", "Shared chore", alice.ID, []string{bob.ID})+`,`+taskJSON("b1", "Bob private", bob.ID, nil)+`,`+taskJSON("legacy", "Legacy", "", nil)+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("admin put %d", res.StatusCode)
+	}
+
+	adminView, revision := getStateGo(t, server.URL, testToken)
+	if len(adminView["tasks"]) != 4 {
+		t.Fatalf("admin sees %v", taskIDs(adminView["tasks"]))
+	}
+	aliceView, _ := getStateGo(t, server.URL, alice.Token)
+	if got := taskIDs(aliceView["tasks"]); len(got) != 2 || got[0] != "a1" || got[1] != "a2" {
+		t.Fatalf("alice sees %v", got)
+	}
+	bobView, _ := getStateGo(t, server.URL, bob.Token)
+	if got := taskIDs(bobView["tasks"]); len(got) != 2 || got[0] != "a2" || got[1] != "b1" {
+		t.Fatalf("bob sees %v", got)
+	}
+
+	// Bob edits the shared task but cannot re-own or unshare it.
+	edited := taskJSON("a2", "Shared chore, done by Bob", bob.ID, nil)
+	parsedEdited := map[string]any{}
+	json.Unmarshal([]byte(edited), &parsedEdited)
+	parsedEdited["done"] = true
+	editedRaw, _ := json.Marshal(parsedEdited)
+	res = putStateGo(t, server.URL, bob.Token, revision, `{"tasks":[`+string(editedRaw)+`,`+taskJSON("b1", "Bob private", bob.ID, nil)+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("bob edit %d", res.StatusCode)
+	}
+	adminView, revision = getStateGo(t, server.URL, testToken)
+	var shared map[string]any
+	for _, task := range adminView["tasks"] {
+		if task["id"] == "a2" {
+			shared = task
+		}
+	}
+	if shared["title"] != "Shared chore, done by Bob" || shared["done"] != true || shared["ownerId"] != alice.ID {
+		t.Fatalf("shared task after bob edit %+v", shared)
+	}
+	if got := shared["sharedWith"].([]any); len(got) != 1 || got[0] != bob.ID {
+		t.Fatalf("sharedWith after bob edit %v", got)
+	}
+	// A tombstone from Bob (how the Web client deletes) is also ignored.
+	tombstone := taskJSON("a2", "Shared chore, done by Bob", alice.ID, []string{bob.ID})
+	parsedTombstone := map[string]any{}
+	json.Unmarshal([]byte(tombstone), &parsedTombstone)
+	parsedTombstone["done"] = true
+	parsedTombstone["deleted"] = true
+	tombstoneRaw, _ := json.Marshal(parsedTombstone)
+	res = putStateGo(t, server.URL, bob.Token, revision, `{"tasks":[`+string(tombstoneRaw)+`,`+taskJSON("b1", "Bob private", bob.ID, nil)+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("bob tombstone %d", res.StatusCode)
+	}
+	adminView, revision = getStateGo(t, server.URL, testToken)
+	for _, task := range adminView["tasks"] {
+		if task["id"] == "a2" {
+			if deleted, _ := task["deleted"].(bool); deleted {
+				t.Fatal("bob's tombstone deleted the shared task")
+			}
+		}
+	}
+
+	// Bob omitting the shared task keeps it (only the owner can delete a
+	// shared task); omitting his own b1 in the same payload deletes b1.
+	res = putStateGo(t, server.URL, bob.Token, revision, `{"tasks":[],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	adminView, revision = getStateGo(t, server.URL, testToken)
+	if got := taskIDs(adminView["tasks"]); len(got) != 3 || got[1] != "a2" {
+		t.Fatalf("bob omission changed tasks %v", got)
+	}
+	// Alice omitting her own task deletes it.
+	aliceView, _ = getStateGo(t, server.URL, alice.Token)
+	remaining := []string{}
+	for _, task := range aliceView["tasks"] {
+		if task["id"] == "a2" {
+			raw, _ := json.Marshal(task)
+			remaining = append(remaining, string(raw))
+		}
+	}
+	res = putStateGo(t, server.URL, alice.Token, revision, `{"tasks":[`+strings.Join(remaining, ",")+`],"categories":[],"projects":[]}`)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("alice delete put %d", res.StatusCode)
+	}
+	adminView, revision = getStateGo(t, server.URL, testToken)
+	if got := taskIDs(adminView["tasks"]); len(got) != 2 || got[0] != "a2" || got[1] != "legacy" {
+		t.Fatalf("after alice delete %v", got)
+	}
+
+	// Deleting Bob revokes his token and unshares a2 from him.
+	del := doRequest(t, http.MethodDelete, server.URL+"/v1/users/"+bob.ID, testToken, "", nil)
+	del.Body.Close()
+	if del.StatusCode != 200 {
+		t.Fatalf("delete bob %d", del.StatusCode)
+	}
+	unauthorized := doRequest(t, http.MethodGet, server.URL+"/v1/state", bob.Token, "", nil)
+	unauthorized.Body.Close()
+	if unauthorized.StatusCode != 401 {
+		t.Fatalf("deleted user status %d", unauthorized.StatusCode)
+	}
+	adminView, _ = getStateGo(t, server.URL, testToken)
+	for _, task := range adminView["tasks"] {
+		if task["id"] == "a2" {
+			if got := task["sharedWith"].([]any); len(got) != 0 {
+				t.Fatalf("a2 sharedWith after bob deleted %v", got)
+			}
+		}
+	}
+	missing := doRequest(t, http.MethodDelete, server.URL+"/v1/users/"+bob.ID, testToken, "", nil)
+	missing.Body.Close()
+	if missing.StatusCode != 404 {
+		t.Fatalf("second delete status %d", missing.StatusCode)
+	}
+	_ = revision
 }
 
 func TestProjectsRoundTripAndLegacyPayload(t *testing.T) {

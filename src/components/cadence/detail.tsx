@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CategoryPicker, DateChooser, Modal, ProjectPicker, RepeatChooser, SectionLabel } from "@/components/cadence/ui";
 import { Button } from "@/components/cadence/ui";
 import {
@@ -12,6 +12,112 @@ import {
   type Task,
 } from "@/lib/cadence/model";
 import { useCadence } from "@/lib/cadence/store";
+import { fetchMe, listUsers, type DirectoryUser, type ServerIdentity } from "@/lib/cadence/sync";
+
+/**
+ * Who owns this toduck and who it is shared with. Sharing is a server
+ * feature: the directory and identity come from the connected server, and
+ * changes save through the normal sync (the server re-stamps ownership and
+ * only lets the owner change the sharing list).
+ */
+function SharingSection({ task }: { task: Task }) {
+  const serverUrl = useCadence((s) => s.serverUrl);
+  const serverToken = useCadence((s) => s.serverToken);
+  const setTaskSharing = useCadence((s) => s.setTaskSharing);
+  const [me, setMe] = useState<ServerIdentity | null>(null);
+  const [directory, setDirectory] = useState<DirectoryUser[]>([]);
+  const [failed, setFailed] = useState(false);
+  const connected = !!serverUrl && !!serverToken;
+
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [identity, users] = await Promise.all([fetchMe(serverUrl, serverToken), listUsers(serverUrl, serverToken)]);
+        if (cancelled) return;
+        setMe(identity);
+        setDirectory(users);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connected, serverUrl, serverToken]);
+
+  const sharedWith = task.sharedWith ?? [];
+  const ownerName =
+    task.ownerId === null
+      ? null
+      : me?.kind === "user" && me.id === task.ownerId
+        ? "You"
+        : (directory.find((user) => user.id === task.ownerId)?.name ?? "Another user");
+  const canChangeSharing =
+    !connected ||
+    me === null ||
+    me.kind === "admin" ||
+    task.ownerId === null ||
+    (me.kind === "user" && me.id === task.ownerId);
+
+  return (
+    <section className="mt-6">
+      <SectionLabel>Sharing</SectionLabel>
+      {!connected ? (
+        <p className="mt-2 text-sm text-muted">
+          Owner: {task.ownerId ? (ownerName ?? "—") : "— (not owned by a user)"}. Sharing needs a server connection —
+          connect one in Settings, then share this toduck with other registered users.
+        </p>
+      ) : failed ? (
+        <p className="mt-2 text-sm text-muted">Could not load the server's user list. Sharing can't be changed right now.</p>
+      ) : (
+        <>
+          <p className="mt-2 text-sm text-muted">
+            Owner: {task.ownerId ? (ownerName ?? "…") : "— (not owned by a user; the admin owns it)"}
+            {sharedWith.length
+              ? `. Shared with ${sharedWith.map((id) => directory.find((user) => user.id === id)?.name ?? "a user").join(", ")}.`
+              : ". Not shared."}
+          </p>
+          {canChangeSharing ? (
+            directory.filter((user) => user.id !== task.ownerId).length ? (
+              <div className="mt-2 space-y-1">
+                {directory
+                  .filter((user) => user.id !== task.ownerId)
+                  .map((user) => (
+                    <label key={user.id} className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-5 shrink-0 accent-[#1c1b19]"
+                        checked={sharedWith.includes(user.id)}
+                        onChange={(event) =>
+                          setTaskSharing(
+                            task.id,
+                            event.target.checked ? [...sharedWith, user.id] : sharedWith.filter((id) => id !== user.id),
+                          )
+                        }
+                      />
+                      <span>
+                        Share with {user.name}
+                        {me?.kind === "user" && me.id === user.id ? " (you)" : ""}
+                      </span>
+                    </label>
+                  ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-muted">No other registered users on this server yet. The admin can create users in Settings.</p>
+            )
+          ) : (
+            <p className="mt-2 text-sm text-muted">
+              Shared with you by {ownerName ?? "the owner"}. You can edit this toduck, but only the owner can change
+              sharing or delete it.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 type Draft = {
   title: string;
@@ -159,6 +265,8 @@ function DetailBody({
           />
         </div>
       </section>
+
+      <SharingSection task={task} />
 
       <section className="mt-6">
         <SectionLabel>Notes</SectionLabel>

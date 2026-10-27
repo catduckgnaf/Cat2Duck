@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeServerUrl, mergeById, pullDoc, readDoc, syncDoc } from "./sync.ts";
+import { createUser, deleteUser, fetchMe, listUsers, normalizeServerUrl, mergeById, pullDoc, readDoc, syncDoc } from "./sync.ts";
 
 test("normalizeServerUrl trims whitespace and handles trailing slashes", () => {
   assert.equal(normalizeServerUrl(""), "");
@@ -54,6 +54,69 @@ test("readDoc extracts safe defaults and validates items strictly", () => {
   assert.equal(doc.tasks[0]?.title, "Test Task");
   // Tasks from before projects existed read back with a null projectId.
   assert.equal(doc.tasks[0]?.projectId, null);
+  // Tasks from before multi-user servers read back unowned and unshared.
+  assert.equal(doc.tasks[0]?.ownerId, null);
+  assert.deepEqual(doc.tasks[0]?.sharedWith, []);
+});
+
+test("readDoc keeps ownerId and sharedWith when present and rejects malformed ones", () => {
+  const base = {
+    id: "t1",
+    title: "Owned",
+    notes: "",
+    categoryId: null,
+    date: null,
+    repeat: { kind: "none" },
+    done: false,
+    createdAt: "2026-09-27T00:00:00Z",
+    updatedAt: "2026-09-27T00:00:00Z",
+  };
+  const doc = readDoc({ tasks: [{ ...base, ownerId: "user-1", sharedWith: ["user-2"] }], categories: [], projects: [] });
+  assert.equal(doc.tasks[0]?.ownerId, "user-1");
+  assert.deepEqual(doc.tasks[0]?.sharedWith, ["user-2"]);
+  const bad = readDoc({ tasks: [{ ...base, sharedWith: "user-2" }], categories: [], projects: [] });
+  assert.equal(bad.tasks.length, 0);
+});
+
+test("user directory helpers call the users endpoints with the caller token", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method: string; authorization: string | null; body?: string }> = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    const headers = new Headers(init.headers);
+    calls.push({ url, method: init.method ?? "GET", authorization: headers.get("Authorization"), body: typeof init.body === "string" ? init.body : undefined });
+    if (url.endsWith("/v1/me")) return new Response(JSON.stringify({ kind: "user", id: "u1", name: "Alice" }), { status: 200 });
+    if (url.endsWith("/v1/users") && (init.method ?? "GET") === "GET") {
+      return new Response(JSON.stringify([{ id: "u1", name: "Alice" }, { id: "u2", name: "Bob", tokenHash: "never-exposed" }]), { status: 200 });
+    }
+    if (url.endsWith("/v1/users") && init.method === "POST") {
+      return new Response(JSON.stringify({ id: "u3", name: "Carol", token: "carol-secret-token" }), { status: 201 });
+    }
+    if (url.endsWith("/v1/users/u3") && init.method === "DELETE") return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    return new Response("{}", { status: 404 });
+  };
+  try {
+    assert.deepEqual(await fetchMe("https://tasks.example.com", "alice-token"), { kind: "user", id: "u1", name: "Alice" });
+    const directory = await listUsers("https://tasks.example.com", "alice-token");
+    assert.equal(directory.length, 2);
+    assert.equal(directory[0]?.name, "Alice");
+    const created = await createUser("https://tasks.example.com", "admin-token", "Carol");
+    assert.equal(created.token, "carol-secret-token");
+    await deleteUser("https://tasks.example.com", "admin-token", "u3");
+    assert.deepEqual(
+      calls.map((call) => [call.method, call.url]),
+      [
+        ["GET", "https://tasks.example.com/v1/me"],
+        ["GET", "https://tasks.example.com/v1/users"],
+        ["POST", "https://tasks.example.com/v1/users"],
+        ["DELETE", "https://tasks.example.com/v1/users/u3"],
+      ],
+    );
+    assert.equal(calls[2]?.authorization, "Bearer admin-token");
+    assert.equal(calls[2]?.body, JSON.stringify({ name: "Carol" }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("mergeById favors newer updatedAt timestamp", () => {
@@ -105,7 +168,7 @@ test("syncDoc retries one stale write after pulling and merging", async () => {
     return new Response(JSON.stringify({ ok: true, revision: 3 }), { status: 200, headers: { ETag: '"3"' } });
   };
   try {
-    const local = { tasks: [{ id: "2", title: "Local", notes: "", categoryId: null, projectId: null, date: null, repeat: { kind: "none" as const }, done: false, completedAt: null, createdAt: "2026-09-27T11:00:00Z", updatedAt: "2026-09-27T11:00:00Z" }], categories: [], projects: [] };
+    const local = { tasks: [{ id: "2", title: "Local", notes: "", categoryId: null, projectId: null, date: null, repeat: { kind: "none" as const }, done: false, completedAt: null, createdAt: "2026-09-27T11:00:00Z", updatedAt: "2026-09-27T11:00:00Z", ownerId: null, sharedWith: [] }], categories: [], projects: [] };
     const result = await syncDoc("https://tasks.example.com", "secret", local, 2);
     assert.equal(result.tasks.length, 2);
     assert.deepEqual(requests, [

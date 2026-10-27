@@ -78,6 +78,40 @@ curl -i -X PUT \
 
 A missing revision returns `428 Precondition Required`. A stale revision returns `409 Conflict`.
 
+## Users and sharing
+
+A server can host several registered users alongside the admin:
+
+* `CADENCE_TOKEN` stays the **admin** credential. It keeps whole-state
+  `GET`/`PUT /v1/state` semantics exactly as before, so existing Web and
+  Android clients keep working unchanged. Accounts are admin-created —
+  there is no open self-registration.
+* **Create a user (admin only):** `POST /v1/users` with `{"name": "…"}` →
+  `201 {"id", "name", "token"}`. The personal token is returned **once**;
+  the server stores only its SHA-256 hash in the state file. In the Web
+  UI, connect with the admin token and use the Users panel in Settings.
+* **Directory (any authenticated token):** `GET /v1/users` → `[{id, name}]`.
+* **Who am I:** `GET /v1/me` → `{"kind": "admin"}` or `{"kind": "user", "id", "name"}`.
+* **Delete a user (admin only):** `DELETE /v1/users/:id` revokes their
+  access and removes them from every task's sharing list.
+
+Each task carries `ownerId` (a user id, or `null` for legacy tasks not
+owned by any user) and `sharedWith` (user ids). With a **personal token**:
+
+* `GET /v1/state` returns categories, projects, and only the tasks the
+  user owns or that are shared with them. Unowned legacy tasks belong to
+  the admin and are **not** visible to personal tokens.
+* `PUT /v1/state` merges scoped to that user: new tasks are stamped with
+  the user as owner, tasks they cannot see are preserved exactly, their
+  own omitted tasks are deleted, and shared tasks stay editable by them —
+  but a shared user cannot delete the owner's task, change its owner, or
+  change who it is shared with (only the owner or the admin can share and
+  unshare).
+
+Users connect from the Web UI with the server address and their personal
+token, exactly like the admin flow. Per-user sign-in in the Android app is
+not included; Android keeps using the admin token.
+
 ## Data and recovery
 
 The container stores state at `/data/state.json` and retains `/data/state.json.bak` as the last known good copy. Writes use a temporary file followed by an atomic rename. On startup, an invalid primary file is restored from the backup when possible. The runtime server is a Go binary; the Node implementation remains in this directory as the behavioral reference and its tests remain part of `npm test`.

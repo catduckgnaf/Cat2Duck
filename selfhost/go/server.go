@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,9 +47,23 @@ type stateFile struct {
 	Tasks      json.RawMessage `json:"tasks"`
 	Categories json.RawMessage `json:"categories"`
 	Projects   json.RawMessage `json:"projects"`
+	Users      []userRecord    `json:"users"`
 	// projectsPresent records whether the source payload carried a projects
 	// array at all; older clients omit it and must not wipe stored projects.
 	projectsPresent bool
+}
+
+// userRecord is a registered user. Only the SHA-256 hash of the personal
+// token is stored, never the raw token.
+type userRecord struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	TokenHash string `json:"tokenHash"`
+}
+
+type publicUser struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type server struct {
@@ -67,7 +84,7 @@ func validateToken(raw string) (string, error) {
 }
 
 func emptyState() stateFile {
-	return stateFile{Tasks: json.RawMessage("[]"), Categories: json.RawMessage("[]"), Projects: json.RawMessage("[]"), projectsPresent: true}
+	return stateFile{Tasks: json.RawMessage("[]"), Categories: json.RawMessage("[]"), Projects: json.RawMessage("[]"), Users: []userRecord{}, projectsPresent: true}
 }
 
 func normalizeState(raw []byte) (stateFile, error) {
@@ -89,6 +106,24 @@ func normalizeState(raw []byte) (stateFile, error) {
 	if !projectsPresent {
 		projects = json.RawMessage("[]")
 	}
+	// Users are optional for the same reason: older state files have none.
+	users := []userRecord{}
+	if rawUsers, ok := value["users"]; ok {
+		if !jsonArray(rawUsers) {
+			return stateFile{}, errors.New("State users must be an array of user records when present.")
+		}
+		if err := json.Unmarshal(rawUsers, &users); err != nil {
+			return stateFile{}, errors.New("State users must be an array of user records when present.")
+		}
+		for _, user := range users {
+			if user.ID == "" || user.Name == "" || user.TokenHash == "" {
+				return stateFile{}, errors.New("State users must be an array of user records when present.")
+			}
+		}
+		if users == nil {
+			users = []userRecord{}
+		}
+	}
 	var revision int64
 	if rawRevision, ok := value["revision"]; ok {
 		_ = json.Unmarshal(rawRevision, &revision)
@@ -101,6 +136,7 @@ func normalizeState(raw []byte) (stateFile, error) {
 		Tasks:           append(json.RawMessage(nil), tasks...),
 		Categories:      append(json.RawMessage(nil), categories...),
 		Projects:        append(json.RawMessage(nil), projects...),
+		Users:           users,
 		projectsPresent: projectsPresent,
 	}, nil
 }
@@ -170,6 +206,208 @@ func tokenMatches(expected, authorization string) bool {
 	return subtle.ConstantTimeCompare(expectedDigest[:], suppliedDigest[:]) == 1
 }
 
+func hashToken(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
+
+func bearerToken(authorization string) string {
+	return regexp.MustCompile(`(?i)^Bearer\s+`).ReplaceAllString(authorization, "")
+}
+
+// authenticate resolves a request's credential: the CADENCE_TOKEN is the
+// admin (full, legacy access); a registered user's personal token scopes
+// state access to that user. Mirrors server.mjs.
+func (s *server) authenticate(r *http.Request) (isAdmin bool, user *userRecord, ok bool) {
+	authorization := r.Header.Get("Authorization")
+	if tokenMatches(s.token, authorization) {
+		return true, nil, true
+	}
+	suppliedHash := hashToken(bearerToken(authorization))
+	s.mu.Lock()
+	users := s.state.Users
+	s.mu.Unlock()
+	for index := range users {
+		stored := users[index].TokenHash
+		if len(stored) == len(suppliedHash) && subtle.ConstantTimeCompare([]byte(stored), []byte(suppliedHash)) == 1 {
+			return false, &users[index], true
+		}
+	}
+	return false, nil, false
+}
+
+type taskMeta struct {
+	ID         string   `json:"id"`
+	OwnerID    *string  `json:"ownerId"`
+	SharedWith []string `json:"sharedWith"`
+	Deleted    bool     `json:"deleted"`
+}
+
+func parseTaskMeta(raw json.RawMessage) taskMeta {
+	var meta taskMeta
+	_ = json.Unmarshal(raw, &meta)
+	if meta.SharedWith == nil {
+		meta.SharedWith = []string{}
+	}
+	return meta
+}
+
+func visibleToUser(meta taskMeta, userID string) bool {
+	if meta.OwnerID != nil && *meta.OwnerID == userID {
+		return true
+	}
+	for _, id := range meta.SharedWith {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeSharedWith keeps only ids of registered users, de-duplicated.
+func sanitizeSharedWith(ids []string, users []userRecord) []string {
+	known := map[string]struct{}{}
+	for _, user := range users {
+		known[user.ID] = struct{}{}
+	}
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		if _, ok := known[id]; !ok {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func splitTasks(raw json.RawMessage) []json.RawMessage {
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return []json.RawMessage{}
+	}
+	return items
+}
+
+func joinTasks(items []json.RawMessage) json.RawMessage {
+	if len(items) == 0 {
+		return json.RawMessage("[]")
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return json.RawMessage("[]")
+	}
+	return raw
+}
+
+// rewriteTask returns the task object with ownerId/sharedWith replaced.
+func rewriteTask(raw json.RawMessage, ownerID *string, sharedWith []string) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		return raw
+	}
+	if ownerID == nil {
+		obj["ownerId"] = json.RawMessage("null")
+	} else {
+		encoded, _ := json.Marshal(*ownerID)
+		obj["ownerId"] = encoded
+	}
+	if sharedWith == nil {
+		sharedWith = []string{}
+	}
+	encoded, _ := json.Marshal(sharedWith)
+	obj["sharedWith"] = encoded
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func taskHasSharedWith(raw json.RawMessage) bool {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return false
+	}
+	_, ok := obj["sharedWith"]
+	return ok
+}
+
+// mergeUserTasks merges a user token's PUT payload into the stored tasks,
+// mirroring mergeUserState in server.mjs: tasks the requester cannot see
+// are preserved exactly; their own omitted tasks are deleted; shared
+// omitted tasks are untouched; ownerId can never be forged or moved;
+// sharedWith changes only on tasks the requester owns.
+func mergeUserTasks(storedRaw, incomingRaw json.RawMessage, users []userRecord, userID string) json.RawMessage {
+	stored := splitTasks(storedRaw)
+	incoming := splitTasks(incomingRaw)
+	incomingByID := map[string]json.RawMessage{}
+	for _, raw := range incoming {
+		meta := parseTaskMeta(raw)
+		if meta.ID != "" {
+			if _, dup := incomingByID[meta.ID]; !dup {
+				incomingByID[meta.ID] = raw
+			}
+		}
+	}
+	storedIDs := map[string]struct{}{}
+	for _, raw := range stored {
+		storedIDs[parseTaskMeta(raw).ID] = struct{}{}
+	}
+	handled := map[string]struct{}{}
+	result := []json.RawMessage{}
+	for _, raw := range stored {
+		meta := parseTaskMeta(raw)
+		inc, hasIncoming := incomingByID[meta.ID]
+		if !visibleToUser(meta, userID) {
+			if hasIncoming {
+				handled[meta.ID] = struct{}{}
+			}
+			result = append(result, raw)
+			continue
+		}
+		if !hasIncoming {
+			if meta.OwnerID == nil || *meta.OwnerID != userID {
+				result = append(result, raw)
+			}
+			continue
+		}
+		handled[meta.ID] = struct{}{}
+		isOwner := meta.OwnerID != nil && *meta.OwnerID == userID
+		// A shared user cannot delete the owner's task: a tombstone from
+		// them is ignored (the Web client deletes by tombstone).
+		if !isOwner && parseTaskMeta(inc).Deleted && !meta.Deleted {
+			result = append(result, raw)
+		} else if isOwner && taskHasSharedWith(inc) {
+			result = append(result, rewriteTask(inc, meta.OwnerID, sanitizeSharedWith(parseTaskMeta(inc).SharedWith, users)))
+		} else if isOwner {
+			result = append(result, rewriteTask(inc, meta.OwnerID, meta.SharedWith))
+		} else {
+			result = append(result, rewriteTask(inc, meta.OwnerID, meta.SharedWith))
+		}
+	}
+	for _, raw := range incoming {
+		meta := parseTaskMeta(raw)
+		if meta.ID == "" {
+			continue
+		}
+		if _, done := handled[meta.ID]; done {
+			continue
+		}
+		if _, exists := storedIDs[meta.ID]; exists {
+			continue
+		}
+		handled[meta.ID] = struct{}{}
+		owner := userID
+		result = append(result, rewriteTask(raw, &owner, sanitizeSharedWith(meta.SharedWith, users)))
+	}
+	return joinTasks(result)
+}
+
 func newServer(cfg config) http.Handler {
 	token, err := validateToken(cfg.token)
 	if err != nil {
@@ -206,6 +444,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.options(w, r, "Authorization, Content-Type, If-Match", "GET, PUT, OPTIONS")
 	case r.URL.Path == "/v1/state" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		s.stateEndpoint(w, r)
+	case (r.URL.Path == "/v1/users" || strings.HasPrefix(r.URL.Path, "/v1/users/") || r.URL.Path == "/v1/me") && r.Method == http.MethodOptions:
+		s.options(w, r, "Authorization, Content-Type", "GET, POST, DELETE, OPTIONS")
+	case r.URL.Path == "/v1/me" && r.Method == http.MethodGet:
+		s.meEndpoint(w, r)
+	case r.URL.Path == "/v1/users" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		s.usersEndpoint(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/users/") && r.Method == http.MethodDelete:
+		s.usersEndpoint(w, r)
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		if !s.serveStatic(w, r) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})
@@ -251,13 +497,165 @@ func (s *server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": "cat2duck"})
 }
 
+func (s *server) meEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !s.originAllowed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Origin not allowed"})
+		return
+	}
+	s.cors(w, r)
+	isAdmin, user, ok := s.authenticate(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+	if isAdmin {
+		writeJSON(w, http.StatusOK, map[string]string{"kind": "admin"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"kind": "user", "id": user.ID, "name": user.Name})
+}
+
+func newUserID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+}
+
+func (s *server) usersEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !s.originAllowed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Origin not allowed"})
+		return
+	}
+	s.cors(w, r)
+	isAdmin, _, ok := s.authenticate(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+	switch {
+	case r.Method == http.MethodGet:
+		s.mu.Lock()
+		users := s.state.Users
+		s.mu.Unlock()
+		directory := []publicUser{}
+		for _, user := range users {
+			directory = append(directory, publicUser{ID: user.ID, Name: user.Name})
+		}
+		writeJSON(w, http.StatusOK, directory)
+	case r.Method == http.MethodPost:
+		if !isAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Only the admin can create users"})
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxBody))
+		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Request body too large"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+			return
+		}
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(body, &payload) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+			return
+		}
+		name := strings.TrimSpace(payload.Name)
+		if len(name) > 80 {
+			name = string([]rune(name)[:80])
+		}
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "A user name is required"})
+			return
+		}
+		// The raw personal token is returned once, here; only its SHA-256
+		// hash is ever stored.
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
+			return
+		}
+		personalToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
+		record := userRecord{ID: newUserID(), Name: name, TokenHash: hashToken(personalToken)}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		next := s.state
+		next.Users = append(append([]userRecord{}, s.state.Users...), record)
+		if err := persistState(s.dataPath, next); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
+			return
+		}
+		s.state = next
+		writeJSON(w, http.StatusCreated, map[string]string{"id": record.ID, "name": record.Name, "token": personalToken})
+	case r.Method == http.MethodDelete:
+		if !isAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Only the admin can delete users"})
+			return
+		}
+		targetID, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/v1/users/"))
+		if err != nil || targetID == "" || strings.Contains(targetID, "/") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "User not found"})
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		found := false
+		remaining := []userRecord{}
+		for _, user := range s.state.Users {
+			if user.ID == targetID {
+				found = true
+			} else {
+				remaining = append(remaining, user)
+			}
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "User not found"})
+			return
+		}
+		// Revoking a user also unshares everything shared with them.
+		tasks := []json.RawMessage{}
+		for _, raw := range splitTasks(s.state.Tasks) {
+			meta := parseTaskMeta(raw)
+			kept := []string{}
+			contains := false
+			for _, id := range meta.SharedWith {
+				if id == targetID {
+					contains = true
+				} else {
+					kept = append(kept, id)
+				}
+			}
+			if contains {
+				raw = rewriteTask(raw, meta.OwnerID, kept)
+			}
+			tasks = append(tasks, raw)
+		}
+		next := s.state
+		next.Users = remaining
+		next.Tasks = joinTasks(tasks)
+		if err := persistState(s.dataPath, next); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
+			return
+		}
+		s.state = next
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
 func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !s.originAllowed(r) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Origin not allowed"})
 		return
 	}
 	s.cors(w, r)
-	if !tokenMatches(s.token, r.Header.Get("Authorization")) {
+	isAdmin, user, authOK := s.authenticate(r)
+	if !authOK {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return
 	}
@@ -265,8 +663,21 @@ func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		state := s.state
 		s.mu.Unlock()
+		// A personal token sees categories, projects, and only the tasks
+		// they own or that are shared with them. Unowned legacy tasks are
+		// the admin's and are not visible to user tokens.
+		tasks := state.Tasks
+		if !isAdmin {
+			visible := []json.RawMessage{}
+			for _, raw := range splitTasks(state.Tasks) {
+				if visibleToUser(parseTaskMeta(raw), user.ID) {
+					visible = append(visible, raw)
+				}
+			}
+			tasks = joinTasks(visible)
+		}
 		w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(state.Revision, 10)))
-		writeJSON(w, http.StatusOK, map[string]json.RawMessage{"tasks": state.Tasks, "categories": state.Categories, "projects": state.Projects})
+		writeJSON(w, http.StatusOK, map[string]json.RawMessage{"tasks": tasks, "categories": state.Categories, "projects": state.Projects})
 		return
 	}
 	match := regexp.MustCompile(`^"(\d+)"$`).FindStringSubmatch(r.Header.Get("If-Match"))
@@ -314,7 +725,13 @@ func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !parsed.projectsPresent {
 		projects = s.state.Projects
 	}
-	next := stateFile{Revision: s.state.Revision + 1, Tasks: parsed.Tasks, Categories: parsed.Categories, Projects: projects, projectsPresent: true}
+	// The admin token keeps whole-state semantics; a personal token's
+	// payload is merged in scoped to that user (see mergeUserTasks).
+	tasks := parsed.Tasks
+	if !isAdmin {
+		tasks = mergeUserTasks(s.state.Tasks, parsed.Tasks, s.state.Users, user.ID)
+	}
+	next := stateFile{Revision: s.state.Revision + 1, Tasks: tasks, Categories: parsed.Categories, Projects: projects, Users: s.state.Users, projectsPresent: true}
 	if err := persistState(s.dataPath, next); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
 		return
