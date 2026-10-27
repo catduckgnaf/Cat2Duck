@@ -43,6 +43,10 @@ type stateFile struct {
 	Revision   int64           `json:"revision"`
 	Tasks      json.RawMessage `json:"tasks"`
 	Categories json.RawMessage `json:"categories"`
+	Projects   json.RawMessage `json:"projects"`
+	// projectsPresent records whether the source payload carried a projects
+	// array at all; older clients omit it and must not wipe stored projects.
+	projectsPresent bool
 }
 
 type server struct {
@@ -63,7 +67,7 @@ func validateToken(raw string) (string, error) {
 }
 
 func emptyState() stateFile {
-	return stateFile{Tasks: json.RawMessage("[]"), Categories: json.RawMessage("[]")}
+	return stateFile{Tasks: json.RawMessage("[]"), Categories: json.RawMessage("[]"), Projects: json.RawMessage("[]"), projectsPresent: true}
 }
 
 func normalizeState(raw []byte) (stateFile, error) {
@@ -76,6 +80,15 @@ func normalizeState(raw []byte) (stateFile, error) {
 	if !tasksOK || !categoriesOK || !jsonArray(tasks) || !jsonArray(categories) {
 		return stateFile{}, errors.New("State must include tasks and categories arrays.")
 	}
+	// Projects are optional: state files and clients from before projects
+	// existed have no projects array, which reads as an empty one.
+	projects, projectsPresent := value["projects"]
+	if projectsPresent && !jsonArray(projects) {
+		return stateFile{}, errors.New("State projects must be an array when present.")
+	}
+	if !projectsPresent {
+		projects = json.RawMessage("[]")
+	}
 	var revision int64
 	if rawRevision, ok := value["revision"]; ok {
 		_ = json.Unmarshal(rawRevision, &revision)
@@ -83,7 +96,13 @@ func normalizeState(raw []byte) (stateFile, error) {
 			revision = 0
 		}
 	}
-	return stateFile{Revision: revision, Tasks: append(json.RawMessage(nil), tasks...), Categories: append(json.RawMessage(nil), categories...)}, nil
+	return stateFile{
+		Revision:        revision,
+		Tasks:           append(json.RawMessage(nil), tasks...),
+		Categories:      append(json.RawMessage(nil), categories...),
+		Projects:        append(json.RawMessage(nil), projects...),
+		projectsPresent: projectsPresent,
+	}, nil
 }
 
 func jsonArray(raw json.RawMessage) bool {
@@ -247,7 +266,7 @@ func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {
 		state := s.state
 		s.mu.Unlock()
 		w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(state.Revision, 10)))
-		writeJSON(w, http.StatusOK, map[string]json.RawMessage{"tasks": state.Tasks, "categories": state.Categories})
+		writeJSON(w, http.StatusOK, map[string]json.RawMessage{"tasks": state.Tasks, "categories": state.Categories, "projects": state.Projects})
 		return
 	}
 	match := regexp.MustCompile(`^"(\d+)"$`).FindStringSubmatch(r.Header.Get("If-Match"))
@@ -272,10 +291,13 @@ func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "tasks and categories") {
 			message = "Expected tasks and categories arrays"
 		}
+		if strings.Contains(err.Error(), "projects must be an array") {
+			message = "Expected projects to be an array when present"
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": message})
 		return
 	}
-	if countArray(parsed.Tasks) > 5000 || countArray(parsed.Categories) > 200 {
+	if countArray(parsed.Tasks) > 5000 || countArray(parsed.Categories) > 200 || countArray(parsed.Projects) > 200 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Too many items"})
 		return
 	}
@@ -286,7 +308,13 @@ func (s *server) stateEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "State changed", "revision": s.state.Revision})
 		return
 	}
-	next := stateFile{Revision: s.state.Revision + 1, Tasks: parsed.Tasks, Categories: parsed.Categories}
+	// A client that predates projects (e.g. the Android app) omits the
+	// array; keep the stored projects instead of wiping them.
+	projects := parsed.Projects
+	if !parsed.projectsPresent {
+		projects = s.state.Projects
+	}
+	next := stateFile{Revision: s.state.Revision + 1, Tasks: parsed.Tasks, Categories: parsed.Categories, Projects: projects, projectsPresent: true}
 	if err := persistState(s.dataPath, next); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to persist state"})
 		return

@@ -2,7 +2,27 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "playwright/test";
+import { expect, test, type Page } from "playwright/test";
+
+/** The nav lives in the sidebar: pinned open on desktop, a drawer on mobile. */
+async function openSidebarIfNeeded(page: Page) {
+  const nav = page.getByRole("navigation", { name: "Views" });
+  if (!(await nav.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: "Toggle navigation" }).click();
+    await expect(nav).toBeVisible();
+  }
+}
+
+async function clickNav(page: Page, pattern: RegExp) {
+  await openSidebarIfNeeded(page);
+  await page.getByRole("button", { name: pattern }).click();
+}
+
+async function closeSidebarIfOpen(page: Page) {
+  // The X inside the sidebar (the backdrop's center is covered by the drawer).
+  const close = page.locator("aside").getByRole("button", { name: "Close navigation" });
+  if (await close.isVisible().catch(() => false)) await close.click();
+}
 
 const title = "QA task that survives the feed";
 const token = "qa-token-that-is-longer-than-thirty-two-characters";
@@ -56,7 +76,7 @@ test("add, edit, complete, repeat, filter, export, import, settings, and compose
     if (message.type() === "error") browserErrors.push(message.text());
   });
 
-  const composer = page.locator("form").filter({ has: page.getByLabel("New task") });
+  const composer = page.locator("form").filter({ has: page.getByLabel("New toduck") });
   await expect(composer).toBeVisible();
   await expect(page.locator("main")).toHaveCount(1);
   const placement = await page.evaluate(() => {
@@ -67,36 +87,39 @@ test("add, edit, complete, repeat, filter, export, import, settings, and compose
   });
   expect(placement).toBe(true);
 
-  await page.getByLabel("New task").fill(title);
+  await page.getByLabel("New toduck").fill(title);
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByText(title, { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: `Details for ${title}` }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Task name").fill(`${title} edited`);
+  await dialog.getByLabel("Toduck name").fill(`${title} edited`);
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(page.getByText(`${title} edited`, { exact: true })).toBeVisible();
 
   await page.getByRole("checkbox", { name: `Complete ${title} edited` }).click();
-  await page.getByRole("button", { name: /^Done/ }).click();
+  await clickNav(page, /^Done/);
   await expect(page.getByText(`${title} edited`, { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Feed \d+$/ }).click();
-  await page.getByLabel("New task").fill("Repeating QA task");
+  await clickNav(page, /^Feed \d+$/);
+  await page.getByLabel("New toduck").fill("Repeating QA task");
   await page.getByRole("button", { name: "Once" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Every day" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: "Add", exact: true }).click();
-  await page.getByRole("button", { name: /^Repeats/ }).click();
+  await clickNav(page, /^Repeats/);
   await expect(page.getByText("Repeating QA task", { exact: true })).toBeVisible();
 
-  await page.getByLabel("Filter tasks").fill("Repeating QA");
+  await openSidebarIfNeeded(page);
+  await page.getByLabel("Filter toducks").fill("Repeating QA");
   await expect(page.getByText("Repeating QA task", { exact: true })).toBeVisible();
-  await page.getByLabel("Filter tasks").fill("does not exist");
+  await page.getByLabel("Filter toducks").fill("does not exist");
   await expect(page.getByText("Nothing matches")).toBeVisible();
+  await closeSidebarIfOpen(page);
   await page.getByRole("main").getByRole("button", { name: "Clear filters" }).click();
 
+  await openSidebarIfNeeded(page);
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByText("Not connected.")).toBeVisible();
@@ -133,8 +156,9 @@ test("add, edit, complete, repeat, filter, export, import, settings, and compose
   }
 
   await page.getByRole("button", { name: "Disconnect" }).click();
-  await expect(page.getByText(/Local tasks were not changed/)).toBeVisible();
+  await expect(page.getByText(/Local toducks were not changed/)).toBeVisible();
   await page.keyboard.press("Escape");
+  await closeSidebarIfOpen(page);
 
   const main = page.getByRole("main");
   const lastTask = main.getByRole("listitem").last();
@@ -179,7 +203,7 @@ test("row controls: one-click date picker, category picker, and repeat checkbox 
   const tomorrow = key(new Date(Date.now() + 86_400_000));
 
   // The date on the row is the picker: fill it and the task moves, no dialog.
-  await page.getByLabel("New task").fill("Quick date task");
+  await page.getByLabel("New toduck").fill("Quick date task");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   const quickRow = page.getByRole("listitem").filter({ hasText: "Quick date task" });
   await expect(quickRow).toBeVisible();
@@ -197,7 +221,7 @@ test("row controls: one-click date picker, category picker, and repeat checkbox 
   await expect(quickRow).toContainText("Home");
 
   // Checking off a repeating task moves it to its next date; it is not "done".
-  await page.getByLabel("New task").fill("Daily quick task");
+  await page.getByLabel("New toduck").fill("Daily quick task");
   await page.getByRole("button", { name: "Once" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Every day" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
@@ -205,9 +229,9 @@ test("row controls: one-click date picker, category picker, and repeat checkbox 
   const dailyRow = page.getByRole("listitem").filter({ hasText: "Daily quick task" });
   await expect(dailyRow).toBeVisible();
   await dailyRow.getByRole("checkbox", { name: /Done\. Move Daily quick task/ }).click();
-  await expect(page.getByText("Moved repeating task to Tomorrow")).toBeVisible();
+  await expect(page.getByText("Moved repeating toduck to Tomorrow")).toBeVisible();
   await expect(dailyRow.getByLabel(/Change date for Daily quick task/)).toHaveValue(tomorrow);
-  await page.getByRole("button", { name: /^Done/ }).click();
+  await clickNav(page, /^Done/);
   await expect(page.getByText("Daily quick task", { exact: true })).toHaveCount(0);
 });
 
@@ -238,4 +262,55 @@ test("self-host server serves a page whose inline scripts run", async ({ page },
     await rm(server.directory, { recursive: true, force: true });
     await rm(staticDir, { recursive: true, force: true });
   }
+});
+
+test("sidebar hosts All Tasks, Workflow, and Projects", async ({ page }, testInfo) => {
+  const nav = page.getByRole("navigation", { name: "Views" });
+  if (testInfo.project.name === "desktop-chromium") {
+    // Pinned open by default on desktop, and the choice to collapse sticks.
+    await expect(nav).toBeVisible();
+    await page.getByRole("button", { name: "Toggle navigation" }).click();
+    await expect(nav).toBeHidden();
+    await page.getByRole("button", { name: "Toggle navigation" }).click();
+    await expect(nav).toBeVisible();
+  } else {
+    // Narrow screens start unpinned; the sidebar is a drawer.
+    await expect(nav).toBeHidden();
+    await openSidebarIfNeeded(page);
+  }
+  await expect(page.getByRole("button", { name: /^All Tasks/ })).toBeVisible();
+  await closeSidebarIfOpen(page);
+
+  const composer = page.locator("form").filter({ has: page.getByLabel("New toduck") });
+  await page.getByLabel("New toduck").fill("Sidebar QA toduck");
+  await composer.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByText("Sidebar QA toduck", { exact: true })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Complete Sidebar QA toduck" }).click();
+
+  // All Tasks shows it even though it is done (the Feed no longer does).
+  await clickNav(page, /^All Tasks/);
+  await expect(page.getByText("Sidebar QA toduck", { exact: true })).toBeVisible();
+
+  // The Workflow board renders its five columns, done toduck in Done.
+  await clickNav(page, /^Workflow/);
+  for (const column of ["Overdue", "Today", "Upcoming", "Later", "Done"]) {
+    await expect(page.getByRole("heading", { name: new RegExp(`^${column}`) })).toBeVisible();
+  }
+  await expect(page.getByText("Sidebar QA toduck", { exact: true })).toBeVisible();
+
+  // Projects: create one, assign a toduck from the composer, filter to it.
+  await clickNav(page, /^Projects/);
+  const main = page.getByRole("main");
+  await main.getByLabel("New project").fill("QA Project");
+  await main.locator("form").getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Show toducks in QA Project/ })).toBeVisible();
+
+  await page.getByLabel("New toduck").fill("Project QA toduck");
+  await composer.getByRole("button", { name: "Project", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "QA Project" }).click();
+  await composer.getByRole("button", { name: "Add", exact: true }).click();
+
+  await page.getByRole("button", { name: /Show toducks in QA Project/ }).click();
+  await expect(page.getByText("Project QA toduck", { exact: true })).toBeVisible();
+  await expect(page.getByText("Sidebar QA toduck", { exact: true })).toHaveCount(0);
 });

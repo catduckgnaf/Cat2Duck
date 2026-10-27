@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   addDays,
+  buildWorkflow,
   completionPatch,
   makeSeed,
   nextOccurrence,
   shownDate,
   visibleTasks,
+  workflowColumnFor,
   type Category,
+  type Project,
   type Task,
 } from "./model.ts";
 
@@ -65,6 +68,7 @@ describe("repeats", () => {
       title: "Stretch",
       notes: "",
       categoryId: null,
+      projectId: null,
       date: "2026-09-20",
       repeat: { kind: "daily" as const },
       done: false,
@@ -72,7 +76,7 @@ describe("repeats", () => {
       createdAt: "a",
       updatedAt: "a",
     };
-    const refine = { query: "", categoryId: null, showRepeating: true };
+    const refine = { query: "", categoryId: null, projectId: null, showRepeating: true };
     assert.equal(visibleTasks([daily], [], "overdue", "2026-09-25", "2026-09-25", refine).length, 1);
     assert.equal(visibleTasks([daily], [], "day", "2026-09-21", "2026-09-25", refine).length, 0);
     assert.equal(visibleTasks([daily], [], "day", "2026-09-25", "2026-09-25", refine).length, 0);
@@ -108,6 +112,7 @@ describe("filters", () => {
       title: "Pay the water bill",
       notes: "confirmation number goes here",
       categoryId: "home",
+      projectId: "house",
       date: "2026-09-23",
       repeat: { kind: "monthly" },
       done: false,
@@ -120,6 +125,7 @@ describe("filters", () => {
       title: "Call the clinic",
       notes: "Thursday opening",
       categoryId: "work",
+      projectId: null,
       date: "2026-09-25",
       repeat: { kind: "none" },
       done: false,
@@ -134,6 +140,7 @@ describe("filters", () => {
     const byNote = visibleTasks(tasks, categories, "overdue", today, today, {
       query: "confirmation",
       categoryId: null,
+      projectId: null,
       showRepeating: true,
     });
     assert.deepEqual(byNote.map((t) => t.id), ["1"]);
@@ -141,6 +148,7 @@ describe("filters", () => {
     const byCategory = visibleTasks(tasks, categories, "day", today, today, {
       query: "work",
       categoryId: null,
+      projectId: null,
       showRepeating: true,
     });
     assert.deepEqual(byCategory.map((t) => t.id), ["2"]);
@@ -148,6 +156,7 @@ describe("filters", () => {
     const hidden = visibleTasks(tasks, categories, "overdue", today, today, {
       query: "",
       categoryId: "home",
+      projectId: null,
       showRepeating: false,
     });
     assert.equal(hidden.length, 0);
@@ -162,5 +171,57 @@ describe("seed", () => {
     assert.ok(seed.tasks.some((t) => t.date === addDays(today, -2) && t.notes.includes("confirmation")));
     assert.ok(seed.tasks.some((t) => t.date === null));
     assert.ok(seed.tasks.every((t) => t.categoryId));
+  });
+});
+
+describe("all, workflow, and projects views", () => {
+  const today = "2026-09-25";
+  const projects: Project[] = [{ id: "house", name: "House", createdAt: "a", updatedAt: "a" }];
+  const base = {
+    notes: "",
+    categoryId: null,
+    projectId: null,
+    repeat: { kind: "none" as const },
+    completedAt: null,
+    createdAt: "a",
+    updatedAt: "a",
+  };
+  const tasks: Task[] = [
+    { ...base, id: "overdue", title: "Overdue one", date: "2026-09-24", done: false },
+    { ...base, id: "today", title: "Today one", date: "2026-09-25", done: false, projectId: "house" },
+    { ...base, id: "upcoming", title: "Upcoming one", date: "2026-09-27", done: false },
+    { ...base, id: "later", title: "Later one", date: null, done: false },
+    { ...base, id: "done", title: "Done one", date: "2026-09-25", done: true, completedAt: "2026-09-25T10:00:00Z", projectId: "house" },
+    { ...base, id: "gone", title: "Deleted one", date: "2026-09-25", done: false, deleted: true },
+  ];
+  const refine = { query: "", categoryId: null, projectId: null, showRepeating: true };
+
+  it("all includes open and done exactly once, and never deleted", () => {
+    const all = visibleTasks(tasks, [], "all", today, today, refine, projects);
+    assert.deepEqual(
+      all.map((t) => t.id).sort(),
+      ["done", "later", "overdue", "today", "upcoming"],
+    );
+    assert.equal(new Set(all.map((t) => t.id)).size, all.length);
+  });
+
+  it("puts every task in exactly one workflow column", () => {
+    assert.equal(workflowColumnFor(tasks[0]!, today), "overdue");
+    assert.equal(workflowColumnFor(tasks[1]!, today), "today");
+    assert.equal(workflowColumnFor(tasks[2]!, today), "upcoming");
+    assert.equal(workflowColumnFor(tasks[3]!, today), "later");
+    assert.equal(workflowColumnFor(tasks[4]!, today), "done");
+    const columns = buildWorkflow(tasks, [], today, today, refine, projects);
+    assert.deepEqual(columns.map((c) => c.id), ["overdue", "today", "upcoming", "later", "done"]);
+    const placed = columns.flatMap((c) => c.tasks.map((t) => t.id));
+    assert.deepEqual(placed.sort(), ["done", "later", "overdue", "today", "upcoming"]);
+    for (const column of columns) assert.equal(column.tasks.length, 1);
+  });
+
+  it("filters by project across views, and matches project names in search", () => {
+    const inProject = visibleTasks(tasks, [], "all", today, today, { ...refine, projectId: "house" }, projects);
+    assert.deepEqual(inProject.map((t) => t.id).sort(), ["done", "today"]);
+    const bySearch = visibleTasks(tasks, [], "all", today, today, { ...refine, query: "house" }, projects);
+    assert.deepEqual(bySearch.map((t) => t.id).sort(), ["done", "today"]);
   });
 });

@@ -2,12 +2,14 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {
   activeCategories,
+  activeProjects,
   completionPatch,
   formatWhen,
   makeSeed,
   normalizeRepeat,
   todayKey,
   type Category,
+  type Project,
   type Repeat,
   type Task,
   type ViewId,
@@ -23,6 +25,7 @@ type TaskInput = {
   title: string;
   notes: string;
   categoryId: string | null;
+  projectId: string | null;
   date: string | null;
   repeat: Repeat;
 };
@@ -30,12 +33,14 @@ type TaskInput = {
 type State = {
   tasks: Task[];
   categories: Category[];
+  projects: Project[];
   seeded: boolean;
   hasHydrated: boolean;
   view: ViewId;
   focusDate: string;
   query: string;
   categoryFilter: string | null;
+  projectFilter: string | null;
   showRepeating: boolean;
   compact: boolean;
   serverUrl: string;
@@ -48,6 +53,7 @@ type State = {
   setFocusDate: (date: string) => void;
   setQuery: (query: string) => void;
   setCategoryFilter: (id: string | null) => void;
+  setProjectFilter: (id: string | null) => void;
   setShowRepeating: (show: boolean) => void;
   setCompact: (compact: boolean) => void;
   clearFilters: () => void;
@@ -61,6 +67,9 @@ type State = {
   addCategory: (name: string) => string | null;
   renameCategory: (id: string, name: string) => void;
   deleteCategory: (id: string) => void;
+  addProject: (name: string) => string | null;
+  renameProject: (id: string, name: string) => void;
+  deleteProject: (id: string) => void;
   setServer: (url: string, token: string) => void;
   importDoc: (doc: CadenceDoc) => void;
   resetSamples: () => void;
@@ -71,8 +80,8 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function noticeOf(text: string, tasks: Task[], categories: Category[]): Notice {
-  return { text, snapshot: { tasks, categories } };
+function noticeOf(text: string, tasks: Task[], categories: Category[], projects: Project[]): Notice {
+  return { text, snapshot: { tasks, categories, projects } };
 }
 
 export const useCadence = create<State>()(
@@ -80,12 +89,14 @@ export const useCadence = create<State>()(
     (set, get) => ({
       tasks: [],
       categories: [],
+      projects: [],
       seeded: false,
       hasHydrated: false,
       view: "feed",
       focusDate: "",
       query: "",
       categoryFilter: null,
+      projectFilter: null,
       showRepeating: true,
       compact: false,
       serverUrl: "",
@@ -98,14 +109,20 @@ export const useCadence = create<State>()(
       setFocusDate: (focusDate) => set({ focusDate, view: "day" }),
       setQuery: (query) => set({ query }),
       setCategoryFilter: (categoryFilter) => set({ categoryFilter }),
+      setProjectFilter: (projectFilter) => set({ projectFilter }),
       setShowRepeating: (showRepeating) => set({ showRepeating }),
       setCompact: (compact) => set({ compact }),
-      clearFilters: () => set({ query: "", categoryFilter: null, showRepeating: true }),
+      clearFilters: () => set({ query: "", categoryFilter: null, projectFilter: null, showRepeating: true }),
       dismissNotice: () => set({ notice: null }),
       undo: () => {
         const notice = get().notice;
         if (!notice) return;
-        set({ tasks: notice.snapshot.tasks, categories: notice.snapshot.categories, notice: null });
+        set({
+          tasks: notice.snapshot.tasks,
+          categories: notice.snapshot.categories,
+          projects: notice.snapshot.projects ?? [],
+          notice: null,
+        });
       },
       addTask: (input) => {
         const title = input.title.trim().slice(0, 200);
@@ -116,6 +133,7 @@ export const useCadence = create<State>()(
           title,
           notes: input.notes.trim().slice(0, 20_000),
           categoryId: input.categoryId,
+          projectId: input.projectId ?? null,
           date: input.date,
           repeat: normalizeRepeat(input.repeat),
           done: false,
@@ -126,7 +144,7 @@ export const useCadence = create<State>()(
         const prev = get();
         set({
           tasks: [task, ...prev.tasks],
-          notice: noticeOf("Added", prev.tasks, prev.categories),
+          notice: noticeOf("Added", prev.tasks, prev.categories, prev.projects),
         });
       },
       updateTask: (id, patch, notice) => {
@@ -140,6 +158,7 @@ export const useCadence = create<State>()(
             title,
             notes: (patch.notes ?? task.notes).slice(0, 20_000),
             categoryId: patch.categoryId === undefined ? task.categoryId : patch.categoryId,
+            projectId: patch.projectId === undefined ? task.projectId : patch.projectId,
             date: patch.date === undefined ? task.date : patch.date,
             repeat: patch.repeat ? normalizeRepeat(patch.repeat) : task.repeat,
             updatedAt: now,
@@ -147,7 +166,7 @@ export const useCadence = create<State>()(
         });
         set({
           tasks,
-          notice: notice ? noticeOf(notice, prev.tasks, prev.categories) : prev.notice,
+          notice: notice ? noticeOf(notice, prev.tasks, prev.categories, prev.projects) : prev.notice,
         });
       },
       moveTask: (id, date) => {
@@ -158,7 +177,7 @@ export const useCadence = create<State>()(
         const today = todayKey();
         set({
           tasks: prev.tasks.map((item) => (item.id === id ? { ...item, date, updatedAt: now } : item)),
-          notice: noticeOf(date ? `Moved to ${formatWhen(date, today)}` : "Moved to later", prev.tasks, prev.categories),
+          notice: noticeOf(date ? `Moved to ${formatWhen(date, today)}` : "Moved to later", prev.tasks, prev.categories, prev.projects),
         });
       },
       toggleTask: (id) => {
@@ -170,13 +189,13 @@ export const useCadence = create<State>()(
         const { advanced, ...fields } = completionPatch(task, today, now);
         const text =
           advanced && fields.date
-            ? `Moved repeating task to ${formatWhen(fields.date, today)}`
+            ? `Moved repeating toduck to ${formatWhen(fields.date, today)}`
             : fields.done
               ? "Completed"
               : "Restored";
         set({
           tasks: prev.tasks.map((item) => (item.id === id ? { ...item, ...fields, updatedAt: now } : item)),
-          notice: noticeOf(text, prev.tasks, prev.categories),
+          notice: noticeOf(text, prev.tasks, prev.categories, prev.projects),
         });
       },
       deleteTask: (id) => {
@@ -184,7 +203,7 @@ export const useCadence = create<State>()(
         const now = nowIso();
         set({
           tasks: prev.tasks.map((task) => (task.id === id ? { ...task, deleted: true, updatedAt: now } : task)),
-          notice: noticeOf("Deleted", prev.tasks, prev.categories),
+          notice: noticeOf("Deleted", prev.tasks, prev.categories, prev.projects),
         });
       },
       addCategory: (name) => {
@@ -219,7 +238,42 @@ export const useCadence = create<State>()(
           categories: prev.categories.map((c) => (c.id === id ? { ...c, deleted: true, updatedAt: now } : c)),
           tasks: prev.tasks.map((t) => (t.categoryId === id ? { ...t, categoryId: null, updatedAt: now } : t)),
           categoryFilter: prev.categoryFilter === id ? null : prev.categoryFilter,
-          notice: noticeOf("Category removed", prev.tasks, prev.categories),
+          notice: noticeOf("Category removed", prev.tasks, prev.categories, prev.projects),
+        });
+      },
+      addProject: (name) => {
+        const trimmed = name.trim().slice(0, 40);
+        if (!trimmed) return null;
+        const existing = activeProjects(get().projects).find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
+        if (existing) return existing.id;
+        const now = nowIso();
+        const id = crypto.randomUUID();
+        set({
+          projects: [...get().projects, { id, name: trimmed, createdAt: now, updatedAt: now }],
+        });
+        return id;
+      },
+      renameProject: (id, name) => {
+        const trimmed = name.trim().slice(0, 40);
+        if (!trimmed) return;
+        const projects = get().projects;
+        const current = projects.find((p) => p.id === id);
+        if (!current || current.deleted || current.name === trimmed) return;
+        const clash = activeProjects(projects).some((p) => p.id !== id && p.name.toLowerCase() === trimmed.toLowerCase());
+        if (clash) return;
+        const now = nowIso();
+        set({
+          projects: projects.map((p) => (p.id === id ? { ...p, name: trimmed, updatedAt: now } : p)),
+        });
+      },
+      deleteProject: (id) => {
+        const prev = get();
+        const now = nowIso();
+        set({
+          projects: prev.projects.map((p) => (p.id === id ? { ...p, deleted: true, updatedAt: now } : p)),
+          tasks: prev.tasks.map((t) => (t.projectId === id ? { ...t, projectId: null, updatedAt: now } : t)),
+          projectFilter: prev.projectFilter === id ? null : prev.projectFilter,
+          notice: noticeOf("Project removed", prev.tasks, prev.categories, prev.projects),
         });
       },
       setServer: (serverUrl, serverToken) =>
@@ -234,8 +288,9 @@ export const useCadence = create<State>()(
         set({
           tasks: mergeById(prev.tasks, doc.tasks),
           categories: mergeById(prev.categories, doc.categories),
+          projects: mergeById(prev.projects, doc.projects ?? []),
           seeded: true,
-          notice: noticeOf("Imported", prev.tasks, prev.categories),
+          notice: noticeOf("Imported", prev.tasks, prev.categories, prev.projects),
         });
       },
       resetSamples: () => {
@@ -244,25 +299,38 @@ export const useCadence = create<State>()(
         set({
           tasks: seed.tasks,
           categories: seed.categories,
+          projects: seed.projects,
           seeded: true,
           categoryFilter: null,
-          notice: noticeOf("Samples restored", prev.tasks, prev.categories),
+          projectFilter: null,
+          notice: noticeOf("Samples restored", prev.tasks, prev.categories, prev.projects),
         });
       },
       clearDone: () => {
         const prev = get();
         const now = nowIso();
         const tasks = prev.tasks.map((task) => (task.done && !task.deleted ? { ...task, deleted: true, updatedAt: now } : task));
-        set({ tasks, notice: noticeOf("Cleared finished tasks", prev.tasks, prev.categories) });
+        set({ tasks, notice: noticeOf("Cleared finished toducks", prev.tasks, prev.categories, prev.projects) });
       },
     }),
     {
       name: "cadence",
-      version: 3,
+      version: 4,
       migrate: (persisted, version) => {
-        const state = (persisted ?? {}) as { view?: ViewId; serverToken?: string };
+        const state = (persisted ?? {}) as {
+          view?: ViewId;
+          serverToken?: string;
+          projects?: Project[];
+          tasks?: Task[];
+        };
         if (version < 2) state.view = "feed";
         if (version < 3) delete state.serverToken;
+        if (version < 4) {
+          // Projects arrived in v4; older payloads have none, and their
+          // tasks have no projectId.
+          state.projects = [];
+          state.tasks = (state.tasks ?? []).map((task) => ({ ...task, projectId: task.projectId ?? null }));
+        }
         return state;
       },
       storage: createJSONStorage(() => localStorage),
@@ -270,10 +338,12 @@ export const useCadence = create<State>()(
       partialize: (state) => ({
         tasks: state.tasks,
         categories: state.categories,
+        projects: state.projects,
         seeded: state.seeded,
         view: state.view,
         focusDate: state.focusDate,
         categoryFilter: state.categoryFilter,
+        projectFilter: state.projectFilter,
         showRepeating: state.showRepeating,
         compact: state.compact,
         serverUrl: state.serverUrl,
@@ -290,6 +360,7 @@ function finishHydration() {
     useCadence.setState({
       tasks: seed.tasks,
       categories: seed.categories,
+      projects: seed.projects,
       seeded: true,
       focusDate: today,
       hasHydrated: true,
@@ -301,7 +372,11 @@ function finishHydration() {
     state.categoryFilter && state.categories.some((c) => c.id === state.categoryFilter && !c.deleted)
       ? state.categoryFilter
       : null;
-  useCadence.setState({ hasHydrated: true, focusDate, categoryFilter });
+  const projects = state.projects ?? [];
+  const tasks = state.tasks.map((task) => (task.projectId === undefined ? { ...task, projectId: null } : task));
+  const projectFilter =
+    state.projectFilter && projects.some((p) => p.id === state.projectFilter && !p.deleted) ? state.projectFilter : null;
+  useCadence.setState({ hasHydrated: true, focusDate, categoryFilter, projects, tasks, projectFilter });
 }
 
 if (useCadence.persist) {
@@ -342,10 +417,11 @@ export async function syncNow() {
       const merged = await syncDoc(snapshot.serverUrl, snapshot.serverToken, {
         tasks: snapshot.tasks,
         categories: snapshot.categories,
+        projects: snapshot.projects,
       });
 
       const current = useCadence.getState();
-      const currentDoc = { tasks: current.tasks, categories: current.categories };
+      const currentDoc = { tasks: current.tasks, categories: current.categories, projects: current.projects };
       const combined = mergeDocs(currentDoc, merged);
 
       useCadence.setState({
@@ -375,7 +451,7 @@ export function bindSync() {
   let timer: number | undefined;
   return useCadence.subscribe((state, prev) => {
     if (!state.hasHydrated || !state.serverUrl || !state.serverToken) return;
-    if (state.tasks === prev.tasks && state.categories === prev.categories) return;
+    if (state.tasks === prev.tasks && state.categories === prev.categories && state.projects === prev.projects) return;
     if (pushing) return;
     window.clearTimeout(timer);
     timer = window.setTimeout(() => {

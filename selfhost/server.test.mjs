@@ -160,3 +160,35 @@ test("invalid primary state recovers from the last known good backup", async () 
   assert.equal(state.revision, 4);
   assert.deepEqual(JSON.parse(await readFile(dataPath, "utf8")), state);
 });
+
+test("projects round-trip, and payloads without projects still work and do not wipe them", async () => {
+  await withServer(async ({ url }) => {
+    const project = { id: "p1", name: "House", createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" };
+    const withProjects = await fetch(`${url}/v1/state`, {
+      method: "PUT",
+      headers: auth({ "Content-Type": "application/json", "If-Match": '"0"' }),
+      body: JSON.stringify({ tasks: [], categories: [], projects: [project] }),
+    });
+    assert.equal(withProjects.status, 200);
+
+    const read = await fetch(`${url}/v1/state`, { headers: auth() });
+    const body = await read.json();
+    assert.deepEqual(body.projects, [project]);
+
+    // An older client PUTs without projects: accepted, projects preserved.
+    const legacy = await fetch(`${url}/v1/state`, {
+      method: "PUT",
+      headers: auth({ "Content-Type": "application/json", "If-Match": '"1"' }),
+      body: JSON.stringify({ tasks: [], categories: [] }),
+    });
+    assert.equal(legacy.status, 200);
+    const after = await (await fetch(`${url}/v1/state`, { headers: auth() })).json();
+    assert.deepEqual(after.projects, [project]);
+  });
+
+  // A fresh server answers projects as an empty array.
+  await withServer(async ({ url }) => {
+    const body = await (await fetch(`${url}/v1/state`, { headers: auth() })).json();
+    assert.deepEqual(body.projects, []);
+  });
+});

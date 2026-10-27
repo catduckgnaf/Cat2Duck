@@ -12,8 +12,8 @@ test("normalizeServerUrl trims whitespace and handles trailing slashes", () => {
 });
 
 test("readDoc extracts safe defaults and validates items strictly", () => {
-  assert.deepEqual(readDoc(null), { tasks: [], categories: [] });
-  assert.deepEqual(readDoc({}), { tasks: [], categories: [] });
+  assert.deepEqual(readDoc(null), { tasks: [], categories: [], projects: [] });
+  assert.deepEqual(readDoc({}), { tasks: [], categories: [], projects: [] });
   const raw = {
     tasks: [
       {
@@ -37,11 +37,23 @@ test("readDoc extracts safe defaults and validates items strictly", () => {
         updatedAt: "2026-09-27T00:00:00Z",
       },
     ],
+    projects: [
+      {
+        id: "p1",
+        name: "House",
+        createdAt: "2026-09-27T00:00:00Z",
+        updatedAt: "2026-09-27T00:00:00Z",
+      },
+    ],
   };
   const doc = readDoc(raw);
   assert.equal(doc.tasks.length, 1);
   assert.equal(doc.categories.length, 1);
+  assert.equal(doc.projects.length, 1);
+  assert.equal(doc.projects[0]?.name, "House");
   assert.equal(doc.tasks[0]?.title, "Test Task");
+  // Tasks from before projects existed read back with a null projectId.
+  assert.equal(doc.tasks[0]?.projectId, null);
 });
 
 test("mergeById favors newer updatedAt timestamp", () => {
@@ -65,7 +77,7 @@ test("pullDoc returns the server ETag revision", async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({ tasks: [], categories: [] }), { status: 200, headers: { ETag: '"7"' } });
   try {
     assert.deepEqual(await pullDoc("https://tasks.example.com", "secret"), {
-      doc: { tasks: [], categories: [] },
+      doc: { tasks: [], categories: [], projects: [] },
       revision: '"7"',
     });
   } finally {
@@ -93,7 +105,7 @@ test("syncDoc retries one stale write after pulling and merging", async () => {
     return new Response(JSON.stringify({ ok: true, revision: 3 }), { status: 200, headers: { ETag: '"3"' } });
   };
   try {
-    const local = { tasks: [{ id: "2", title: "Local", notes: "", categoryId: null, date: null, repeat: { kind: "none" as const }, done: false, completedAt: null, createdAt: "2026-09-27T11:00:00Z", updatedAt: "2026-09-27T11:00:00Z" }], categories: [] };
+    const local = { tasks: [{ id: "2", title: "Local", notes: "", categoryId: null, projectId: null, date: null, repeat: { kind: "none" as const }, done: false, completedAt: null, createdAt: "2026-09-27T11:00:00Z", updatedAt: "2026-09-27T11:00:00Z" }], categories: [], projects: [] };
     const result = await syncDoc("https://tasks.example.com", "secret", local, 2);
     assert.equal(result.tasks.length, 2);
     assert.deepEqual(requests, [

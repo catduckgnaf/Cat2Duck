@@ -1,8 +1,9 @@
-import { activeCategories, type Category, type Repeat, type Task } from "./model.ts";
+import { activeCategories, activeProjects, type Category, type Project, type Repeat, type Task } from "./model.ts";
 
 export type CadenceDoc = {
   tasks: Task[];
   categories: Category[];
+  projects: Project[];
 };
 
 export type VersionedCadenceDoc = {
@@ -24,6 +25,8 @@ export function isTask(value: unknown): value is Task {
   if (typeof t.id !== "string" || typeof t.title !== "string") return false;
   if (typeof t.notes !== "string") return false;
   if (!(t.categoryId === null || typeof t.categoryId === "string")) return false;
+  // projectId arrived later than the other fields; older payloads omit it.
+  if (!(t.projectId === undefined || t.projectId === null || typeof t.projectId === "string")) return false;
   if (!(t.date === null || (typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date)))) return false;
   if (!isRepeat(t.repeat)) return false;
   if (typeof t.done !== "boolean") return false;
@@ -37,12 +40,21 @@ export function isCategory(value: unknown): value is Category {
   return typeof c.id === "string" && typeof c.name === "string" && typeof c.createdAt === "string" && typeof c.updatedAt === "string";
 }
 
+export function isProject(value: unknown): value is Project {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Partial<Project>;
+  return typeof p.id === "string" && typeof p.name === "string" && typeof p.createdAt === "string" && typeof p.updatedAt === "string";
+}
+
 export function readDoc(value: unknown): CadenceDoc {
-  if (!value || typeof value !== "object") return { tasks: [], categories: [] };
-  const doc = value as { tasks?: unknown; categories?: unknown };
+  if (!value || typeof value !== "object") return { tasks: [], categories: [], projects: [] };
+  const doc = value as { tasks?: unknown; categories?: unknown; projects?: unknown };
   return {
-    tasks: Array.isArray(doc.tasks) ? doc.tasks.filter(isTask) : [],
+    tasks: Array.isArray(doc.tasks)
+      ? doc.tasks.filter(isTask).map((task) => ({ ...task, projectId: task.projectId ?? null }))
+      : [],
     categories: Array.isArray(doc.categories) ? doc.categories.filter(isCategory) : [],
+    projects: Array.isArray(doc.projects) ? doc.projects.filter(isProject) : [],
   };
 }
 
@@ -65,6 +77,7 @@ export function mergeDocs(local: CadenceDoc, remote: CadenceDoc): CadenceDoc {
   return {
     tasks: mergeById(local.tasks, remote.tasks),
     categories: mergeById(local.categories, remote.categories),
+    projects: mergeById(local.projects, remote.projects),
   };
 }
 
@@ -120,6 +133,7 @@ export async function pushDoc(url: string, token: string, doc: CadenceDoc, revis
     body: JSON.stringify({
       tasks: doc.tasks,
       categories: activeCategories(doc.categories).concat(doc.categories.filter((c) => c.deleted)),
+      projects: activeProjects(doc.projects).concat(doc.projects.filter((p) => p.deleted)),
     }),
   });
   const nextRevision = res.headers.get("ETag");

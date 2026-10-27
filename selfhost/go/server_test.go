@@ -219,3 +219,66 @@ func readBody(res *http.Response) string {
 	raw, _ := io.ReadAll(res.Body)
 	return string(raw)
 }
+
+func TestProjectsRoundTripAndLegacyPayload(t *testing.T) {
+	server, _ := newTestServer(t)
+	defer server.Close()
+	project := `{"id":"p1","name":"House","createdAt":"2026-09-28T00:00:00.000Z","updatedAt":"2026-09-28T00:00:00.000Z"}`
+	put := func(revision, body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/state", bytes.NewBufferString(body))
+		auth(req)
+		req.Header.Set("If-Match", revision)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	get := func() map[string]json.RawMessage {
+		req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/state", nil)
+		auth(req)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	if res := put(`"0"`, `{"tasks":[],"categories":[],"projects":[`+project+`]}`); res.StatusCode != 200 {
+		t.Fatalf("write with projects status %d", res.StatusCode)
+	}
+	if got := string(get()["projects"]); got != "["+project+"]" {
+		t.Fatalf("projects did not round-trip: %s", got)
+	}
+	// An older client PUTs without projects: accepted, projects preserved.
+	if res := put(`"1"`, `{"tasks":[],"categories":[]}`); res.StatusCode != 200 {
+		t.Fatalf("legacy write status %d", res.StatusCode)
+	}
+	if got := string(get()["projects"]); got != "["+project+"]" {
+		t.Fatalf("legacy write wiped projects: %s", got)
+	}
+}
+
+func TestProjectsDefaultEmpty(t *testing.T) {
+	server, _ := newTestServer(t)
+	defer server.Close()
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/state", nil)
+	auth(req)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body["projects"]); got != "[]" {
+		t.Fatalf("fresh state projects = %s, want []", got)
+	}
+}
