@@ -14,11 +14,11 @@ import {
   type Task,
   type ViewId,
 } from "./model.ts";
-import { mergeById, mergeDocs, syncDoc, type CadenceDoc } from "./sync.ts";
+import { mergeById, mergeDocs, syncDoc, type ToduckDoc } from "./sync.ts";
 
 export type Notice = {
   text: string;
-  snapshot: CadenceDoc;
+  snapshot: ToduckDoc;
 } | null;
 
 type TaskInput = {
@@ -72,7 +72,7 @@ type State = {
   renameProject: (id: string, name: string) => void;
   deleteProject: (id: string) => void;
   setServer: (url: string, token: string) => void;
-  importDoc: (doc: CadenceDoc) => void;
+  importDoc: (doc: ToduckDoc) => void;
   resetSamples: () => void;
   clearDone: () => void;
 };
@@ -85,7 +85,7 @@ function noticeOf(text: string, tasks: Task[], categories: Category[], projects:
   return { text, snapshot: { tasks, categories, projects } };
 }
 
-export const useCadence = create<State>()(
+export const useToduck = create<State>()(
   persist(
     (set, get) => ({
       tasks: [],
@@ -329,7 +329,7 @@ export const useCadence = create<State>()(
       },
     }),
     {
-      name: "cadence",
+      name: "toduck",
       version: 5,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as {
@@ -377,11 +377,11 @@ export const useCadence = create<State>()(
 );
 
 function finishHydration() {
-  const state = useCadence.getState();
+  const state = useToduck.getState();
   const today = todayKey();
   if (!state.seeded) {
     const seed = makeSeed(today);
-    useCadence.setState({
+    useToduck.setState({
       tasks: seed.tasks,
       categories: seed.categories,
       projects: seed.projects,
@@ -405,31 +405,49 @@ function finishHydration() {
   }));
   const projectFilter =
     state.projectFilter && projects.some((p) => p.id === state.projectFilter && !p.deleted) ? state.projectFilter : null;
-  useCadence.setState({ hasHydrated: true, focusDate, categoryFilter, projects, tasks, projectFilter });
+  useToduck.setState({ hasHydrated: true, focusDate, categoryFilter, projects, tasks, projectFilter });
 }
 
-if (useCadence.persist) {
-  useCadence.persist.onFinishHydration(() => {
+if (useToduck.persist) {
+  useToduck.persist.onFinishHydration(() => {
     finishHydration();
   });
 }
 
-export async function bootCadence() {
-  if (typeof window === "undefined") return;
-  if (useCadence.getState().hasHydrated) return;
+/**
+ * One-time storage migration for the Cat2Duck → Toduck rename: the persist
+ * key was "cadence" before the rename. If the new "toduck" key is absent
+ * and the legacy key exists, copy its value across so existing browser
+ * data survives. The legacy key is left in place as a fallback copy.
+ */
+export function migrateLegacyPersistKey(storage: Pick<Storage, "getItem" | "setItem">): void {
   try {
-    await useCadence.persist.rehydrate();
+    if (storage.getItem("toduck") === null) {
+      const legacy = storage.getItem("cadence");
+      if (legacy !== null) storage.setItem("toduck", legacy);
+    }
+  } catch {
+    // Storage unavailable (private mode, SSR); hydration falls back to seed.
+  }
+}
+
+export async function bootToduck() {
+  if (typeof window === "undefined") return;
+  if (useToduck.getState().hasHydrated) return;
+  migrateLegacyPersistKey(window.localStorage);
+  try {
+    await useToduck.persist.rehydrate();
   } catch {
     finishHydration();
   }
-  if (!useCadence.getState().hasHydrated) finishHydration();
+  if (!useToduck.getState().hasHydrated) finishHydration();
 }
 
 let pushing = false;
 let pendingSync = false;
 
 export async function syncNow() {
-  const initial = useCadence.getState();
+  const initial = useToduck.getState();
   if (!initial.serverUrl || !initial.serverToken) return;
   if (pushing) {
     pendingSync = true;
@@ -437,23 +455,23 @@ export async function syncNow() {
   }
 
   pushing = true;
-  useCadence.setState({ syncStatus: "syncing", syncError: null });
+  useToduck.setState({ syncStatus: "syncing", syncError: null });
 
   try {
     while (true) {
       pendingSync = false;
-      const snapshot = useCadence.getState();
+      const snapshot = useToduck.getState();
       const merged = await syncDoc(snapshot.serverUrl, snapshot.serverToken, {
         tasks: snapshot.tasks,
         categories: snapshot.categories,
         projects: snapshot.projects,
       });
 
-      const current = useCadence.getState();
+      const current = useToduck.getState();
       const currentDoc = { tasks: current.tasks, categories: current.categories, projects: current.projects };
       const combined = mergeDocs(currentDoc, merged);
 
-      useCadence.setState({
+      useToduck.setState({
         ...combined,
         syncStatus: "ok",
         syncError: null,
@@ -463,7 +481,7 @@ export async function syncNow() {
       if (!pendingSync) break;
     }
   } catch (error) {
-    useCadence.setState({
+    useToduck.setState({
       syncStatus: "error",
       syncError: error instanceof Error ? error.message : "Could not reach the server.",
     });
@@ -478,7 +496,7 @@ export async function pushNow() {
 
 export function bindSync() {
   let timer: number | undefined;
-  return useCadence.subscribe((state, prev) => {
+  return useToduck.subscribe((state, prev) => {
     if (!state.hasHydrated || !state.serverUrl || !state.serverToken) return;
     if (state.tasks === prev.tasks && state.categories === prev.categories && state.projects === prev.projects) return;
     if (pushing) return;

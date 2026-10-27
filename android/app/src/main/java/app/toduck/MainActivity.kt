@@ -1,4 +1,4 @@
-package app.cadence
+package app.toduck
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Paper, surface = Paper, primary = Ink, onPrimary = Paper, onSurface = Ink, onBackground = Ink)) {
                 Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), color = Paper) {
-                    CadenceApp()
+                    ToduckApp()
                 }
             }
         }
@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun CadenceApp() {
+private fun ToduckApp() {
     val context = LocalContext.current
     var doc by remember { mutableStateOf(Store.load(context)) }
     var view by remember { mutableStateOf("feed") }
@@ -104,7 +104,7 @@ private fun CadenceApp() {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Cadence", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text("Toduck", style = MaterialTheme.typography.titleLarge, color = Ink)
             TextButton(onClick = { settings = true }) { Text("Settings") }
         }
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

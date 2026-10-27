@@ -31,7 +31,7 @@ async function startSyncServer(
   port: number,
   staticDir: string = join(process.cwd(), ".vercel/output/static"),
 ): Promise<{ child: ChildProcess; directory: string }> {
-  const directory = await mkdtemp(join(tmpdir(), "cat2duck-e2e-"));
+  const directory = await mkdtemp(join(tmpdir(), "toduck-e2e-"));
   const processEnv = { ...process.env };
   delete processEnv.HTTP_PROXY;
   delete processEnv.HTTPS_PROXY;
@@ -40,8 +40,8 @@ async function startSyncServer(
     cwd: process.cwd(),
     env: {
       ...processEnv,
-      CADENCE_TOKEN: token,
-      CADENCE_ALLOWED_ORIGINS: "http://127.0.0.1:4173,http://127.0.0.1:8080",
+      TODUCK_TOKEN: token,
+      TODUCK_ALLOWED_ORIGINS: "http://127.0.0.1:4173,http://127.0.0.1:8080",
       DATA_PATH: join(directory, "state.json"),
       PORT: String(port),
       STATIC_DIR: staticDir,
@@ -130,7 +130,7 @@ test("add, edit, complete, repeat, filter, export, import, settings, and compose
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export" }).click();
   const exportDownload = await downloadPromise;
-  expect(exportDownload.suggestedFilename()).toBe("cadence.json");
+  expect(exportDownload.suggestedFilename()).toBe("toduck.json");
   const exportPath = await exportDownload.path();
   if (!exportPath) throw new Error("Export did not produce a file");
 
@@ -240,7 +240,7 @@ test("self-host server serves a page whose inline scripts run", async ({ page },
   // the inline bootstrap scripts in the Web UI it serves, or the deployed app
   // renders blank even though the API works. The main flow test cannot catch
   // this - it loads the UI from the Vite dev server, not the self-host server.
-  const staticDir = await mkdtemp(join(tmpdir(), "cat2duck-e2e-static-"));
+  const staticDir = await mkdtemp(join(tmpdir(), "toduck-e2e-static-"));
   await writeFile(
     join(staticDir, "index.html"),
     '<!doctype html><title>selfhost</title><p id="app">waiting</p>' +

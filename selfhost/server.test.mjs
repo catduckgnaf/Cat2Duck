@@ -3,14 +3,14 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createCadenceServer, loadState, validateToken } from "./server.mjs";
+import { createToduckServer, loadState, validateToken } from "./server.mjs";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 
 async function withServer(run, options = {}) {
-  const dir = await mkdtemp(join(tmpdir(), "cat2duck-server-"));
+  const dir = await mkdtemp(join(tmpdir(), "toduck-server-"));
   const dataPath = join(dir, "state.json");
-  const server = createCadenceServer({ token: TOKEN, dataPath, staticDir: dir, ...options });
+  const server = createToduckServer({ token: TOKEN, dataPath, staticDir: dir, ...options });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   const url = `http://127.0.0.1:${address.port}`;
@@ -26,8 +26,8 @@ function auth(extra = {}) {
 }
 
 test("validateToken rejects missing, default, and weak secrets", () => {
-  assert.throws(() => validateToken(""), /CADENCE_TOKEN/);
-  assert.throws(() => validateToken("change-me"), /CADENCE_TOKEN/);
+  assert.throws(() => validateToken(""), /TODUCK_TOKEN/);
+  assert.throws(() => validateToken("change-me"), /TODUCK_TOKEN/);
   assert.throws(() => validateToken("short"), /32 characters/);
   assert.equal(validateToken(TOKEN), TOKEN);
 });
@@ -99,7 +99,7 @@ test("CORS is absent by default and explicit origins are allowlisted", async () 
 
 test("security headers are returned for web responses", async () => {
   await withServer(async ({ url, dir }) => {
-    await writeFile(join(dir, "index.html"), "<!doctype html><title>Cadence</title>");
+    await writeFile(join(dir, "index.html"), "<!doctype html><title>Toduck</title>");
     const response = await fetch(`${url}/`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
@@ -127,7 +127,7 @@ test("write queue recovers from an individual persistence failure", async () => 
   await withServer(async ({ dir }) => {
     const badPath = join(dir, "cannot-write-here");
     await writeFile(badPath, "existing-file");
-    const brokenServer = createCadenceServer({ token: TOKEN, dataPath: join(badPath, "nested.json"), staticDir: dir });
+    const brokenServer = createToduckServer({ token: TOKEN, dataPath: join(badPath, "nested.json"), staticDir: dir });
     await new Promise((resolve) => brokenServer.listen(0, "127.0.0.1", resolve));
     const brokenUrl = `http://127.0.0.1:${brokenServer.address().port}`;
     try {
@@ -151,7 +151,7 @@ test("write queue recovers from an individual persistence failure", async () => 
 });
 
 test("invalid primary state recovers from the last known good backup", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "cat2duck-recovery-"));
+  const dir = await mkdtemp(join(tmpdir(), "toduck-recovery-"));
   const dataPath = join(dir, "state.json");
   const backup = `${dataPath}.bak`;
   await writeFile(dataPath, "{truncated");

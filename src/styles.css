@@ -161,21 +161,21 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .modal-overlay {
-    animation: cadence-fade 150ms ease;
+    animation: toduck-fade 150ms ease;
   }
 
   .modal-content {
-    animation: cadence-pop 250ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: toduck-pop 250ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
 
 @media (max-width: 640px) and (prefers-reduced-motion: no-preference) {
   .modal-content {
-    animation: cadence-sheet 250ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: toduck-sheet 250ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
 
-@keyframes cadence-fade {
+@keyframes toduck-fade {
   from {
     opacity: 0;
   }
@@ -184,7 +184,7 @@
   }
 }
 
-@keyframes cadence-pop {
+@keyframes toduck-pop {
   from {
     opacity: 0;
     transform: translate(-50%, -48%) scale(0.96);
@@ -195,7 +195,7 @@
   }
 }
 
-@keyframes cadence-sheet {
+@keyframes toduck-sheet {
   from {
     opacity: 0;
     transform: translateY(12px);
@@ -206,7 +206,7 @@
   }
 }
 
-.cadence-cal {
+.toduck-cal {
   --rdp-accent-color: #f4f1ea;
   --rdp-accent-background-color: #2c2a26;
   --rdp-today-color: #f4f1ea;
@@ -217,21 +217,21 @@
   --rdp-weekday-opacity: 0.7;
 }
 
-.cadence-cal .rdp-root {
+.toduck-cal .rdp-root {
   margin-inline: auto;
   color: var(--color-ink);
 }
 
-.cadence-cal .rdp-selected {
+.toduck-cal .rdp-selected {
   font-size: inherit;
   font-weight: 600;
 }
 
-.cadence-cal .rdp-day_button {
+.toduck-cal .rdp-day_button {
   color: var(--color-ink);
 }
 
-.cadence-cal .rdp-selected .rdp-day_button {
+.toduck-cal .rdp-selected .rdp-day_button {
   background: var(--color-ink);
   color: var(--color-paper);
 }
