@@ -1,3 +1,3 @@
-module cat2duck/selfhost
+module toduck/selfhost
 
 go 1.22

@@ -1,13 +1,13 @@
 import { activeCategories, activeProjects, type Category, type Project, type Repeat, type Task } from "./model.ts";
 
-export type CadenceDoc = {
+export type ToduckDoc = {
   tasks: Task[];
   categories: Category[];
   projects: Project[];
 };
 
-export type VersionedCadenceDoc = {
-  doc: CadenceDoc;
+export type VersionedToduckDoc = {
+  doc: ToduckDoc;
   revision: string;
 };
 
@@ -49,7 +49,7 @@ export function isProject(value: unknown): value is Project {
   return typeof p.id === "string" && typeof p.name === "string" && typeof p.createdAt === "string" && typeof p.updatedAt === "string";
 }
 
-export function readDoc(value: unknown): CadenceDoc {
+export function readDoc(value: unknown): ToduckDoc {
   if (!value || typeof value !== "object") return { tasks: [], categories: [], projects: [] };
   const doc = value as { tasks?: unknown; categories?: unknown; projects?: unknown };
   return {
@@ -78,7 +78,7 @@ export function mergeById<T extends { id: string; updatedAt: string; deleted?: b
   });
 }
 
-export function mergeDocs(local: CadenceDoc, remote: CadenceDoc): CadenceDoc {
+export function mergeDocs(local: ToduckDoc, remote: ToduckDoc): ToduckDoc {
   return {
     tasks: mergeById(local.tasks, remote.tasks),
     categories: mergeById(local.categories, remote.categories),
@@ -124,14 +124,14 @@ async function request(url: string, token: string, path: string, init?: RequestI
   return res;
 }
 
-export async function pullDoc(url: string, token: string): Promise<VersionedCadenceDoc> {
+export async function pullDoc(url: string, token: string): Promise<VersionedToduckDoc> {
   const res = await request(url, token, "/v1/state");
   const revision = res.headers.get("ETag");
   if (!revision) throw new Error("Server did not provide a state revision.");
   return { doc: readDoc(await res.json()), revision };
 }
 
-export async function pushDoc(url: string, token: string, doc: CadenceDoc, revision: string): Promise<string> {
+export async function pushDoc(url: string, token: string, doc: ToduckDoc, revision: string): Promise<string> {
   const res = await request(url, token, "/v1/state", {
     method: "PUT",
     headers: { "If-Match": revision },
@@ -146,7 +146,7 @@ export async function pushDoc(url: string, token: string, doc: CadenceDoc, revis
   return nextRevision;
 }
 
-export async function syncDoc(url: string, token: string, local: CadenceDoc, maxAttempts = 3): Promise<CadenceDoc> {
+export async function syncDoc(url: string, token: string, local: ToduckDoc, maxAttempts = 3): Promise<ToduckDoc> {
   let candidate = local;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const remote = await pullDoc(url, token);

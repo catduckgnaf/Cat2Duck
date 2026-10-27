@@ -1,26 +1,26 @@
 services:
-  cadence:
-    image: ghcr.io/catduckgnaf/cat2duck:latest
+  toduck:
+    image: ghcr.io/catduckgnaf/toduck:latest
     build:
       context: ..
       dockerfile: selfhost/Dockerfile
     ports:
-      - "${CAT2DUCK_BIND:-0.0.0.0}:${CAT2DUCK_PORT:-8793}:8787"
+      - "${TODUCK_BIND:-0.0.0.0}:${TODUCK_PORT:-8793}:8787"
     environment:
-      CADENCE_TOKEN: ${CADENCE_TOKEN:?Set CADENCE_TOKEN to a random secret of at least 32 characters}
-      CADENCE_ALLOWED_ORIGINS: ${CADENCE_ALLOWED_ORIGINS:-}
+      TODUCK_TOKEN: ${TODUCK_TOKEN:?Set TODUCK_TOKEN to a random secret of at least 32 characters}
+      TODUCK_ALLOWED_ORIGINS: ${TODUCK_ALLOWED_ORIGINS:-}
       PORT: 8787
       DATA_PATH: /data/state.json
       STATIC_DIR: /app/static
     volumes:
-      - cadence-data:/data
+      - toduck-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "/app/cat2duck-server", "--healthcheck", "http://127.0.0.1:8787/health"]
+      test: ["CMD", "/app/toduck-server", "--healthcheck", "http://127.0.0.1:8787/health"]
       interval: 30s
       timeout: 5s
       start_period: 5s
       retries: 3
 
 volumes:
-  cadence-data:
+  toduck-data:

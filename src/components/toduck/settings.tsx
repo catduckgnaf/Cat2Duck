@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
-import { Button, Modal, SectionLabel } from "@/components/cadence/ui";
-import { activeCategories, activeProjects } from "@/lib/cadence/model";
-import { useCadence } from "@/lib/cadence/store";
+import { Button, Modal, SectionLabel } from "@/components/toduck/ui";
+import { activeCategories, activeProjects } from "@/lib/toduck/model";
+import { useToduck } from "@/lib/toduck/store";
 import {
   checkServer,
   createUser,
@@ -12,8 +12,8 @@ import {
   normalizeServerUrl,
   readDoc,
   type DirectoryUser,
-} from "@/lib/cadence/sync";
-import { syncNow } from "@/lib/cadence/store";
+} from "@/lib/toduck/sync";
+import { syncNow } from "@/lib/toduck/store";
 
 /**
  * Admin-only panel: registered users on the connected server. Rendered
@@ -148,10 +148,10 @@ export function UsersPanel({ url, token }: { url: string; token: string }) {
 }
 
 export function CategoriesDialog({ onClose }: { onClose: () => void }) {
-  const categories = useCadence((s) => s.categories);
-  const addCategory = useCadence((s) => s.addCategory);
-  const renameCategory = useCadence((s) => s.renameCategory);
-  const deleteCategory = useCadence((s) => s.deleteCategory);
+  const categories = useToduck((s) => s.categories);
+  const addCategory = useToduck((s) => s.addCategory);
+  const renameCategory = useToduck((s) => s.renameCategory);
+  const deleteCategory = useToduck((s) => s.deleteCategory);
   const [draft, setDraft] = useState("");
   const items = activeCategories(categories);
 
@@ -199,10 +199,10 @@ export function CategoriesDialog({ onClose }: { onClose: () => void }) {
 }
 
 export function ProjectsDialog({ onClose }: { onClose: () => void }) {
-  const projects = useCadence((s) => s.projects);
-  const addProject = useCadence((s) => s.addProject);
-  const renameProject = useCadence((s) => s.renameProject);
-  const deleteProject = useCadence((s) => s.deleteProject);
+  const projects = useToduck((s) => s.projects);
+  const addProject = useToduck((s) => s.addProject);
+  const renameProject = useToduck((s) => s.renameProject);
+  const deleteProject = useToduck((s) => s.deleteProject);
   const [draft, setDraft] = useState("");
   const items = activeProjects(projects);
 
@@ -274,18 +274,18 @@ function CategoryRow({ name, onRename, onDelete }: { name: string; onRename: (na
 }
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const serverUrl = useCadence((s) => s.serverUrl);
-  const serverToken = useCadence((s) => s.serverToken);
-  const syncStatus = useCadence((s) => s.syncStatus);
-  const syncError = useCadence((s) => s.syncError);
-  const lastSyncedAt = useCadence((s) => s.lastSyncedAt);
-  const setServer = useCadence((s) => s.setServer);
-  const importDoc = useCadence((s) => s.importDoc);
-  const resetSamples = useCadence((s) => s.resetSamples);
-  const clearDone = useCadence((s) => s.clearDone);
-  const tasks = useCadence((s) => s.tasks);
-  const categories = useCadence((s) => s.categories);
-  const projects = useCadence((s) => s.projects);
+  const serverUrl = useToduck((s) => s.serverUrl);
+  const serverToken = useToduck((s) => s.serverToken);
+  const syncStatus = useToduck((s) => s.syncStatus);
+  const syncError = useToduck((s) => s.syncError);
+  const lastSyncedAt = useToduck((s) => s.lastSyncedAt);
+  const setServer = useToduck((s) => s.setServer);
+  const importDoc = useToduck((s) => s.importDoc);
+  const resetSamples = useToduck((s) => s.resetSamples);
+  const clearDone = useToduck((s) => s.clearDone);
+  const tasks = useToduck((s) => s.tasks);
+  const categories = useToduck((s) => s.categories);
+  const projects = useToduck((s) => s.projects);
   const [url, setUrl] = useState(serverUrl);
   const [token, setToken] = useState(serverToken);
   const [message, setMessage] = useState<string | null>(null);
@@ -330,7 +330,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     );
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "cadence.json";
+    link.download = "toduck.json";
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -387,7 +387,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           >
             Disconnect
           </Button>
-          <a className="inline-flex min-h-11 items-center rounded-full bg-paper-2 px-4 text-sm font-medium text-ink" href="/cadence-pack.zip" download>
+          <a className="inline-flex min-h-11 items-center rounded-full bg-paper-2 px-4 text-sm font-medium text-ink" href="/toduck-pack.zip" download>
             Download server and Android app
           </a>
         </div>

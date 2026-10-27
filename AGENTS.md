@@ -1,13 +1,13 @@
-# Cat2Duck — project guide
+# Toduck — project guide
 
-Cat2Duck is a local-first task manager (internal codename "Cadence") with a
+Toduck is a local-first task manager (formerly Cat2Duck) with a
 responsive Web UI, repeating tasks, categories, search, import/export,
 optional self-hosted sync, and an Android companion app.
 
 ## Layout
 
-- `src/components/cadence` — task manager UI
-- `src/lib/cadence` — task model, state, persistence, and sync client
+- `src/components/toduck` — task manager UI
+- `src/lib/toduck` — task model, state, persistence, and sync client
 - `selfhost` — standalone sync server (Go runtime; the Node implementation is
   the behavioral reference), Docker image, Compose file, and Unraid template
 - `android` — Android client and home-screen widget
@@ -40,7 +40,7 @@ cd selfhost/go && go test ./...
   the environment; that file ships `VITE_AUTH_ENABLED=false`, and a real
   environment variable always wins over it.
 - Tasks stay in browser storage unless sync is configured. The sync token
-  (`CADENCE_TOKEN`, at least 32 characters) is kept only in the browser
+  (`TODUCK_TOKEN`, at least 32 characters) is kept only in the browser
   session — never commit it. See `selfhost/README.md` for the sync API,
   Docker, and Unraid details.
 - Preview/runtime scratch files live under `.preview/` (gitignored). The

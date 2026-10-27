@@ -26,11 +26,11 @@ Object.defineProperty(globalThis, "localStorage", {
   } satisfies Storage,
 });
 
-const { useCadence, syncNow } = await import("./store.ts");
+const { useToduck, syncNow, migrateLegacyPersistKey } = await import("./store.ts");
 
 function resetState() {
   localStorage.clear();
-  useCadence.setState({
+  useToduck.setState({
     tasks: [],
     categories: [],
     projects: [],
@@ -54,7 +54,7 @@ function resetState() {
 
 test("disconnect clears browser credentials without deleting local tasks", () => {
   resetState();
-  useCadence.getState().addTask({
+  useToduck.getState().addTask({
     title: "Keep me",
     notes: "",
     categoryId: null,
@@ -62,10 +62,10 @@ test("disconnect clears browser credentials without deleting local tasks", () =>
     date: "2026-09-28",
     repeat: { kind: "none" },
   });
-  useCadence.getState().setServer("https://tasks.example.com", "session-secret");
-  useCadence.getState().setServer("", "");
+  useToduck.getState().setServer("https://tasks.example.com", "session-secret");
+  useToduck.getState().setServer("", "");
 
-  const state = useCadence.getState();
+  const state = useToduck.getState();
   assert.equal(state.serverUrl, "");
   assert.equal(state.serverToken, "");
   assert.equal(state.syncStatus, "off");
@@ -73,11 +73,27 @@ test("disconnect clears browser credentials without deleting local tasks", () =>
   assert.equal(state.tasks[0]?.title, "Keep me");
 });
 
+test("legacy persist key migrates to the toduck key exactly once", () => {
+  resetState();
+  // resetState() re-persists the blank state under the new key; remove it
+  // so the fixture below is the only pre-rename data present.
+  localStorage.removeItem("toduck");
+  localStorage.setItem("cadence", "{\"state\":{\"seeded\":true},\"version\":5}");
+  migrateLegacyPersistKey(localStorage);
+  assert.equal(localStorage.getItem("toduck"), "{\"state\":{\"seeded\":true},\"version\":5}");
+  // A second run must not overwrite data written under the new key.
+  localStorage.setItem("toduck", "{\"state\":{\"seeded\":false},\"version\":5}");
+  migrateLegacyPersistKey(localStorage);
+  assert.equal(localStorage.getItem("toduck"), "{\"state\":{\"seeded\":false},\"version\":5}");
+  // The persist store itself is registered under the new name.
+  assert.equal(useToduck.persist.getOptions().name, "toduck");
+});
+
 test("persisted state excludes the bearer token", () => {
   resetState();
-  useCadence.getState().setServer("https://tasks.example.com", "session-secret");
-  const options = useCadence.persist.getOptions();
-  const persisted = options.partialize?.(useCadence.getState()) as Record<string, unknown>;
+  useToduck.getState().setServer("https://tasks.example.com", "session-secret");
+  const options = useToduck.persist.getOptions();
+  const persisted = options.partialize?.(useToduck.getState()) as Record<string, unknown>;
 
   assert.equal(persisted.serverUrl, "https://tasks.example.com");
   assert.equal("serverToken" in persisted, false);
@@ -113,10 +129,10 @@ test("concurrent local edits while sync is in flight are preserved", async () =>
   };
 
   try {
-    useCadence.getState().setServer("https://tasks.example.com", "session-secret");
+    useToduck.getState().setServer("https://tasks.example.com", "session-secret");
     const syncPromise = syncNow();
 
-    useCadence.getState().addTask({
+    useToduck.getState().addTask({
       title: "Concurrent local task",
       notes: "must not be wiped",
       categoryId: null,
@@ -128,7 +144,7 @@ test("concurrent local edits while sync is in flight are preserved", async () =>
     releaseServer();
     await syncPromise;
 
-    const state = useCadence.getState();
+    const state = useToduck.getState();
     assert.equal(state.syncStatus, "ok");
     assert.equal(state.tasks.some((t) => t.title === "Concurrent local task"), true);
   } finally {
@@ -143,9 +159,9 @@ test("failed synchronization records an actionable connection error", async () =
     throw new TypeError("network down");
   };
   try {
-    useCadence.getState().setServer("https://tasks.example.com", "session-secret");
+    useToduck.getState().setServer("https://tasks.example.com", "session-secret");
     await syncNow();
-    const state = useCadence.getState();
+    const state = useToduck.getState();
     assert.equal(state.syncStatus, "error");
     assert.match(state.syncError ?? "", /Could not reach the server/);
   } finally {
@@ -155,7 +171,7 @@ test("failed synchronization records an actionable connection error", async () =
 
 test("projects mirror categories: create, dedupe, rename, assign, delete clears tasks", () => {
   resetState();
-  const state = () => useCadence.getState();
+  const state = () => useToduck.getState();
   const id = state().addProject("House");
   assert.ok(id);
   assert.equal(state().addProject("house"), id);
@@ -174,7 +190,7 @@ test("projects mirror categories: create, dedupe, rename, assign, delete clears 
   assert.equal(state().tasks[0]?.projectId, id);
 
   // The assignment survives the persisted (partialized) shape.
-  const options = useCadence.persist.getOptions();
+  const options = useToduck.persist.getOptions();
   const persisted = options.partialize?.(state()) as { tasks: Array<{ projectId: string | null }>; projects: unknown[] };
   assert.equal(persisted.tasks[0]?.projectId, id);
   assert.equal(persisted.projects.length, 1);
@@ -188,7 +204,7 @@ test("projects mirror categories: create, dedupe, rename, assign, delete clears 
 
 test("new tasks start unowned and unshared; setTaskSharing updates the share list", () => {
   resetState();
-  const state = () => useCadence.getState();
+  const state = () => useToduck.getState();
   state().addTask({
     title: "Shareable",
     notes: "",
@@ -208,14 +224,14 @@ test("new tasks start unowned and unshared; setTaskSharing updates the share lis
 
   // The sharing fields survive the persisted (partialized) shape.
   state().setTaskSharing(task.id, ["user-1"]);
-  const options = useCadence.persist.getOptions();
+  const options = useToduck.persist.getOptions();
   const persisted = options.partialize?.(state()) as { tasks: Array<{ ownerId: string | null; sharedWith: string[] }> };
   assert.deepEqual(persisted.tasks[0]?.sharedWith, ["user-1"]);
   assert.equal(persisted.tasks[0]?.ownerId, null);
 });
 
 test("migrating a v4 payload adds a null ownerId and an empty sharedWith", () => {
-  const options = useCadence.persist.getOptions();
+  const options = useToduck.persist.getOptions();
   assert.equal(options.version, 5);
   const migrate = options.migrate as unknown as (state: unknown, version: number) => {
     tasks: Array<{ ownerId: string | null; sharedWith: string[] }>;
@@ -247,7 +263,7 @@ test("migrating a v4 payload adds a null ownerId and an empty sharedWith", () =>
 });
 
 test("migrating a v3 payload adds empty projects and a null projectId", () => {
-  const options = useCadence.persist.getOptions();
+  const options = useToduck.persist.getOptions();
   const migrate = options.migrate as unknown as (state: unknown, version: number) => {
     projects: unknown[];
     tasks: Array<{ projectId: string | null }>;

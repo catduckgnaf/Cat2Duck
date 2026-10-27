@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { CategoryPicker, DateChooser, Modal, ProjectPicker, RepeatChooser, SectionLabel } from "@/components/cadence/ui";
-import { Button } from "@/components/cadence/ui";
+import { CategoryPicker, DateChooser, Modal, ProjectPicker, RepeatChooser, SectionLabel } from "@/components/toduck/ui";
+import { Button } from "@/components/toduck/ui";
 import {
   formatWhen,
   normalizeRepeat,
@@ -10,9 +10,9 @@ import {
   type Project,
   type Repeat,
   type Task,
-} from "@/lib/cadence/model";
-import { useCadence } from "@/lib/cadence/store";
-import { fetchMe, listUsers, type DirectoryUser, type ServerIdentity } from "@/lib/cadence/sync";
+} from "@/lib/toduck/model";
+import { useToduck } from "@/lib/toduck/store";
+import { fetchMe, listUsers, type DirectoryUser, type ServerIdentity } from "@/lib/toduck/sync";
 
 /**
  * Who owns this toduck and who it is shared with. Sharing is a server
@@ -21,9 +21,9 @@ import { fetchMe, listUsers, type DirectoryUser, type ServerIdentity } from "@/l
  * only lets the owner change the sharing list).
  */
 function SharingSection({ task }: { task: Task }) {
-  const serverUrl = useCadence((s) => s.serverUrl);
-  const serverToken = useCadence((s) => s.serverToken);
-  const setTaskSharing = useCadence((s) => s.setTaskSharing);
+  const serverUrl = useToduck((s) => s.serverUrl);
+  const serverToken = useToduck((s) => s.serverToken);
+  const setTaskSharing = useToduck((s) => s.setTaskSharing);
   const [me, setMe] = useState<ServerIdentity | null>(null);
   const [directory, setDirectory] = useState<DirectoryUser[]>([]);
   const [failed, setFailed] = useState(false);
@@ -129,9 +129,9 @@ type Draft = {
 };
 
 export function Detail({ taskId, onClose }: { taskId: string; onClose: () => void }) {
-  const task = useCadence((s) => s.tasks.find((item) => item.id === taskId && !item.deleted));
-  const categories = useCadence((s) => s.categories);
-  const projects = useCadence((s) => s.projects);
+  const task = useToduck((s) => s.tasks.find((item) => item.id === taskId && !item.deleted));
+  const categories = useToduck((s) => s.categories);
+  const projects = useToduck((s) => s.projects);
   if (!task) return null;
   return <DetailBody key={task.id} task={task} categories={categories} projects={projects} onClose={onClose} />;
 }
@@ -147,10 +147,10 @@ function DetailBody({
   projects: Project[];
   onClose: () => void;
 }) {
-  const updateTask = useCadence((s) => s.updateTask);
-  const deleteTask = useCadence((s) => s.deleteTask);
-  const addCategory = useCadence((s) => s.addCategory);
-  const addProject = useCadence((s) => s.addProject);
+  const updateTask = useToduck((s) => s.updateTask);
+  const deleteTask = useToduck((s) => s.deleteTask);
+  const addCategory = useToduck((s) => s.addCategory);
+  const addProject = useToduck((s) => s.addProject);
   const today = todayKey();
   const visibleDate = shownDate(task, today);
   const [title, setTitle] = useState(task.title);

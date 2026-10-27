@@ -1,4 +1,4 @@
-package app.cadence
+package app.toduck
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -73,7 +73,7 @@ class TodayWidget : AppWidgetProvider() {
         context.resources.getIdentifier(name, "id", context.packageName)
 
     companion object {
-        const val ACTION_TOGGLE = "app.cadence.TOGGLE"
+        const val ACTION_TOGGLE = "app.toduck.TOGGLE"
         const val EXTRA_ID = "taskId"
     }
 }

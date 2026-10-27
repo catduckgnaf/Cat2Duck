@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Menu, Settings, X } from "lucide-react";
-import { Detail } from "@/components/cadence/detail";
-import { CategoriesDialog, ProjectsDialog, SettingsDialog } from "@/components/cadence/settings";
-import { Button, CategoryPicker, Chip, DateChooser, Modal, ProjectPicker, RepeatChooser } from "@/components/cadence/ui";
+import { Detail } from "@/components/toduck/detail";
+import { CategoriesDialog, ProjectsDialog, SettingsDialog } from "@/components/toduck/settings";
+import { Button, CategoryPicker, Chip, DateChooser, Modal, ProjectPicker, RepeatChooser } from "@/components/toduck/ui";
 import {
   activeCategories,
   activeProjects,
@@ -25,8 +25,8 @@ import {
   type Repeat,
   type Task,
   type ViewId,
-} from "@/lib/cadence/model";
-import { bindSync, syncNow, useCadence } from "@/lib/cadence/store";
+} from "@/lib/toduck/model";
+import { bindSync, syncNow, useToduck } from "@/lib/toduck/store";
 
 const VIEWS: { id: ViewId; label: string }[] = [
   { id: "all", label: "All Tasks" },
@@ -41,21 +41,25 @@ const VIEWS: { id: ViewId; label: string }[] = [
   { id: "projects", label: "Projects" },
 ];
 
-const SIDEBAR_STORAGE_KEY = "cat2duck-sidebar-open";
+const SIDEBAR_STORAGE_KEY = "toduck-sidebar-open";
+// Pre-rename key (Cat2Duck → Toduck); read once as a fallback so an
+// existing pinned/collapsed choice survives the rename.
+const LEGACY_SIDEBAR_STORAGE_KEY = "cat2duck-sidebar-open";
 
 function initialSidebarOpen(): boolean {
   if (typeof window === "undefined") return true;
   // Narrow screens start unpinned; the sidebar is a drawer there.
   if (window.innerWidth < 768) return false;
   try {
-    const stored = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    const stored =
+      window.localStorage.getItem(SIDEBAR_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_SIDEBAR_STORAGE_KEY);
     return stored === null ? true : stored === "1";
   } catch {
     return true;
   }
 }
 
-export function CadenceShell() {
+export function ToduckShell() {
   return (
     <div className="mx-auto flex h-dvh w-full max-w-6xl flex-col bg-paper px-5 pt-8">
       <div className="h-4 w-20 rounded-full bg-paper-2" />
@@ -66,8 +70,8 @@ export function CadenceShell() {
   );
 }
 
-export function CadenceScreen() {
-  const state = useCadence();
+export function ToduckScreen() {
+  const state = useToduck();
   const [detailId, setDetailId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
@@ -180,7 +184,7 @@ export function CadenceScreen() {
           <div className="flex items-center gap-3 px-4 pt-5">
             <img src="/logo.png" alt="" className="size-11 shrink-0 rounded-xl" />
             <div className="min-w-0 flex-1">
-              <p className="font-display text-xl leading-tight text-ink">Cat2Duck</p>
+              <p className="font-display text-xl leading-tight text-ink">Toduck</p>
               <p className="text-xs text-muted">Your toducks</p>
             </div>
             <button
@@ -429,7 +433,7 @@ function ProjectsList({
   onSelect: (id: string) => void;
   onManage: () => void;
 }) {
-  const addProject = useCadence((s) => s.addProject);
+  const addProject = useToduck((s) => s.addProject);
   const [name, setName] = useState("");
   return (
     <div className="px-5 pt-4">
@@ -610,11 +614,11 @@ function TaskRow({
   compact: boolean;
   onOpen: () => void;
 }) {
-  const moveTask = useCadence((s) => s.moveTask);
-  const toggleTask = useCadence((s) => s.toggleTask);
-  const updateTask = useCadence((s) => s.updateTask);
-  const addCategory = useCadence((s) => s.addCategory);
-  const allCategories = useCadence((s) => s.categories);
+  const moveTask = useToduck((s) => s.moveTask);
+  const toggleTask = useToduck((s) => s.toggleTask);
+  const updateTask = useToduck((s) => s.updateTask);
+  const addCategory = useToduck((s) => s.addCategory);
+  const allCategories = useToduck((s) => s.categories);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const when = shownDate(task, today);
   const preview = notePreview(task.notes);
@@ -780,11 +784,11 @@ function Composer({
   categoryFilter: string | null;
   projectFilter: string | null;
 }) {
-  const categories = activeCategories(useCadence((s) => s.categories));
-  const projects = activeProjects(useCadence((s) => s.projects));
-  const addTask = useCadence((s) => s.addTask);
-  const addCategory = useCadence((s) => s.addCategory);
-  const addProject = useCadence((s) => s.addProject);
+  const categories = activeCategories(useToduck((s) => s.categories));
+  const projects = activeProjects(useToduck((s) => s.projects));
+  const addTask = useToduck((s) => s.addTask);
+  const addCategory = useToduck((s) => s.addCategory);
+  const addProject = useToduck((s) => s.addProject);
   const today = todayKey();
   const defaultDate = view === "later" ? null : view === "upcoming" ? addDays(today, 1) : view === "day" ? focus : today;
   const [title, setTitle] = useState("");

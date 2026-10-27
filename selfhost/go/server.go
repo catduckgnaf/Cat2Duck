@@ -75,10 +75,10 @@ type server struct {
 
 func validateToken(raw string) (string, error) {
 	if raw == "" || raw == "change-me" {
-		return "", errors.New("CADENCE_TOKEN must be explicitly configured.")
+		return "", errors.New("TODUCK_TOKEN must be explicitly configured.")
 	}
 	if len(raw) < 32 {
-		return "", errors.New("CADENCE_TOKEN must be at least 32 characters long.")
+		return "", errors.New("TODUCK_TOKEN must be at least 32 characters long.")
 	}
 	return raw, nil
 }
@@ -215,7 +215,7 @@ func bearerToken(authorization string) string {
 	return regexp.MustCompile(`(?i)^Bearer\s+`).ReplaceAllString(authorization, "")
 }
 
-// authenticate resolves a request's credential: the CADENCE_TOKEN is the
+// authenticate resolves a request's credential: the TODUCK_TOKEN is the
 // admin (full, legacy access); a registered user's personal token scopes
 // state access to that user. Mirrors server.mjs.
 func (s *server) authenticate(r *http.Request) (isAdmin bool, user *userRecord, ok bool) {
@@ -494,7 +494,7 @@ func (s *server) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cors(w, r)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": "cat2duck"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": "toduck"})
 }
 
 func (s *server) meEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -851,7 +851,7 @@ func main() {
 		os.Exit(0)
 	}
 	origins := []string{}
-	for _, origin := range strings.Split(os.Getenv("CADENCE_ALLOWED_ORIGINS"), ",") {
+	for _, origin := range strings.Split(os.Getenv("TODUCK_ALLOWED_ORIGINS"), ",") {
 		if trimmed := strings.TrimSpace(origin); trimmed != "" {
 			origins = append(origins, trimmed)
 		}
@@ -868,7 +868,7 @@ func main() {
 	if port == "" {
 		port = "8787"
 	}
-	handler := newServer(config{token: os.Getenv("CADENCE_TOKEN"), dataPath: dataPath, staticDir: staticDir, allowedOrigins: origins})
-	log.Printf("Cat2Duck server listening on %s", port)
+	handler := newServer(config{token: os.Getenv("TODUCK_TOKEN"), dataPath: dataPath, staticDir: staticDir, allowedOrigins: origins})
+	log.Printf("Toduck server listening on %s", port)
 	log.Fatal(http.ListenAndServe("0.0.0.0:"+port, handler))
 }

@@ -1,4 +1,4 @@
-package app.cadence
+package app.toduck
 
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
@@ -8,7 +8,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object Store {
-    private const val PREF = "cadence"
+    private const val PREF = "toduck"
     private const val KEY = "doc"
     private const val URL_KEY = "serverUrl"
     private const val TOKEN_KEY = "serverToken"

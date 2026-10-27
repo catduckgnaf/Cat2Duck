@@ -18,8 +18,8 @@ const SECURITY_HEADERS = {
 
 export function validateToken(raw) {
   const token = String(raw || "");
-  if (!token || token === "change-me") throw new Error("CADENCE_TOKEN must be explicitly configured.");
-  if (Buffer.byteLength(token) < 32) throw new Error("CADENCE_TOKEN must be at least 32 characters long.");
+  if (!token || token === "change-me") throw new Error("TODUCK_TOKEN must be explicitly configured.");
+  if (Buffer.byteLength(token) < 32) throw new Error("TODUCK_TOKEN must be at least 32 characters long.");
   return token;
 }
 
@@ -199,7 +199,7 @@ function bearerToken(authorization) {
 }
 
 /**
- * Resolve a request's credential: the CADENCE_TOKEN is the admin (full,
+ * Resolve a request's credential: the TODUCK_TOKEN is the admin (full,
  * legacy access); a registered user's personal token scopes state access
  * to that user. Returns null when neither matches.
  */
@@ -245,7 +245,7 @@ function send(res, status, body, type = "application/json; charset=utf-8", heade
   res.end(headOnly ? undefined : body);
 }
 
-export function createCadenceServer({ token, dataPath = "/data/state.json", staticDir = "/app/static", maxBody = DEFAULT_MAX_BODY, allowedOrigins = [] } = {}) {
+export function createToduckServer({ token, dataPath = "/data/state.json", staticDir = "/app/static", maxBody = DEFAULT_MAX_BODY, allowedOrigins = [] } = {}) {
   const configuredToken = validateToken(token);
   const origins = new Set(allowedOrigins.filter(Boolean));
   let state = loadState(dataPath);
@@ -444,7 +444,7 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
         send(res, 403, JSON.stringify({ error: "Origin not allowed" }));
         return;
       }
-      send(res, 200, JSON.stringify({ ok: true, name: "cat2duck" }), undefined, corsHeaders(req));
+      send(res, 200, JSON.stringify({ ok: true, name: "toduck" }), undefined, corsHeaders(req));
       return;
     }
 
@@ -561,10 +561,10 @@ export function createCadenceServer({ token, dataPath = "/data/state.json", stat
 }
 
 function runFromEnvironment() {
-  const allowedOrigins = String(process.env.CADENCE_ALLOWED_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean);
-  const server = createCadenceServer({ token: process.env.CADENCE_TOKEN, dataPath: process.env.DATA_PATH || "/data/state.json", staticDir: process.env.STATIC_DIR || "/app/static", allowedOrigins });
+  const allowedOrigins = String(process.env.TODUCK_ALLOWED_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+  const server = createToduckServer({ token: process.env.TODUCK_TOKEN, dataPath: process.env.DATA_PATH || "/data/state.json", staticDir: process.env.STATIC_DIR || "/app/static", allowedOrigins });
   const port = Number(process.env.PORT || 8787);
-  server.listen(port, "0.0.0.0", () => console.log(`Cat2Duck server listening on ${port}`));
+  server.listen(port, "0.0.0.0", () => console.log(`Toduck server listening on ${port}`));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "app.cadence"
+    namespace = "app.toduck"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.cadence"
+        applicationId = "app.toduck"
         minSdk = 26
         targetSdk = 35
         versionCode = 4

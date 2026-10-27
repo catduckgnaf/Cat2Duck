@@ -1,6 +1,8 @@
-# Cat2Duck
+# Toduck
 
-Cat2Duck is a local first task manager with a responsive Web UI, repeating tasks, categories, search, import and export, optional self hosted synchronization, and an Android companion app.
+Toduck is a local first task manager with a responsive Web UI, repeating tasks, categories, search, import and export, optional self hosted synchronization, and an Android companion app.
+
+> **Renamed from Cat2Duck.** The GitHub repository, the app brand, and the container image were renamed to Toduck in October 2026, and the old internal name (Cadence) was retired with it — including the Android app id, the server environment variables, and the browser storage keys. The old repository URL redirects here, and the old image `ghcr.io/catduckgnaf/cat2duck` is superseded by `ghcr.io/catduckgnaf/toduck`. Existing installs need a few one-time steps: Web browser data migrates automatically on first load, and old `cadence.json` exports still import (new exports are `toduck.json`); server installs must rename their environment variables (see the upgrade note in the self hosting guide); and the Android app is a **new app identity** — uninstall the old app and install Toduck fresh (see the Android guide).
 
 ## Features
 
@@ -40,13 +42,13 @@ Playwright browser tests exercise the core task flow at desktop and 390 by 844 m
 The bundled container serves both the compiled Web UI and synchronization API from one origin.
 
 ```sh
-export CADENCE_TOKEN="$(openssl rand -hex 32)"
+export TODUCK_TOKEN="$(openssl rand -hex 32)"
 docker compose -f selfhost/docker-compose.yml up --build -d
 ```
 
-Open `http://localhost:8793`. The host address and port can be changed with `CAT2DUCK_BIND` and `CAT2DUCK_PORT`.
+Open `http://localhost:8793`. The host address and port can be changed with `TODUCK_BIND` and `TODUCK_PORT`.
 
-A prebuilt image is published to `ghcr.io/catduckgnaf/cat2duck` (amd64 and arm64); `docker compose -f selfhost/docker-compose.yml pull` uses it instead of building locally.
+A prebuilt image is published to `ghcr.io/catduckgnaf/toduck` (amd64 and arm64); `docker compose -f selfhost/docker-compose.yml pull` uses it instead of building locally.
 
 See [the self hosting guide](selfhost/README.md) for authentication, CORS, backups, API behavior, Docker, and Unraid instructions.
 
@@ -56,8 +58,8 @@ See [the Android guide](android/README.md) for build and connection instructions
 
 ## Repository layout
 
-* `src/components/cadence`: task manager UI
-* `src/lib/cadence`: task model, state, persistence, and sync client
+* `src/components/toduck`: task manager UI
+* `src/lib/toduck`: task model, state, persistence, and sync client
 * `selfhost`: standalone server, Docker image, Compose file, and Unraid template
 * `android`: Android client
 * `e2e`: Playwright browser tests
@@ -68,4 +70,4 @@ Tasks remain in browser storage unless synchronization is configured. The server
 
 ## License
 
-Cat2Duck is open source software licensed under the [MIT License](LICENSE).
+Toduck is open source software licensed under the [MIT License](LICENSE).

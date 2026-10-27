@@ -17,7 +17,7 @@ import {
   type Category,
   type Project,
   type Repeat,
-} from "@/lib/cadence/model";
+} from "@/lib/toduck/model";
 
 export function Button({
   variant = "quiet",
@@ -150,7 +150,7 @@ export function DateChooser({
         {calendarOpen ? "Hide calendar" : "Pick a date"}
       </Button>
       {calendarOpen ? (
-        <div className="cadence-cal mt-3">
+        <div className="toduck-cal mt-3">
           <DayPicker
             mode="single"
             weekStartsOn={1}
