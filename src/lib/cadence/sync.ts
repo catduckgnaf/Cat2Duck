@@ -27,6 +27,9 @@ export function isTask(value: unknown): value is Task {
   if (!(t.categoryId === null || typeof t.categoryId === "string")) return false;
   // projectId arrived later than the other fields; older payloads omit it.
   if (!(t.projectId === undefined || t.projectId === null || typeof t.projectId === "string")) return false;
+  // ownerId / sharedWith arrived with multi-user servers; older payloads omit both.
+  if (!(t.ownerId === undefined || t.ownerId === null || typeof t.ownerId === "string")) return false;
+  if (!(t.sharedWith === undefined || (Array.isArray(t.sharedWith) && t.sharedWith.every((id) => typeof id === "string")))) return false;
   if (!(t.date === null || (typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date)))) return false;
   if (!isRepeat(t.repeat)) return false;
   if (typeof t.done !== "boolean") return false;
@@ -51,7 +54,9 @@ export function readDoc(value: unknown): CadenceDoc {
   const doc = value as { tasks?: unknown; categories?: unknown; projects?: unknown };
   return {
     tasks: Array.isArray(doc.tasks)
-      ? doc.tasks.filter(isTask).map((task) => ({ ...task, projectId: task.projectId ?? null }))
+      ? doc.tasks
+          .filter(isTask)
+          .map((task) => ({ ...task, projectId: task.projectId ?? null, ownerId: task.ownerId ?? null, sharedWith: task.sharedWith ?? [] }))
       : [],
     categories: Array.isArray(doc.categories) ? doc.categories.filter(isCategory) : [],
     projects: Array.isArray(doc.projects) ? doc.projects.filter(isProject) : [],
@@ -159,4 +164,58 @@ export async function syncDoc(url: string, token: string, local: CadenceDoc, max
 export async function checkServer(url: string, token: string): Promise<void> {
   await request(url, token, "/health");
   await pullDoc(url, token);
+}
+
+export type DirectoryUser = {
+  id: string;
+  name: string;
+};
+
+export type ServerIdentity = { kind: "admin" } | { kind: "user"; id: string; name: string };
+
+/**
+ * Who the given token is on this server. Servers from before multi-user
+ * support have no /v1/me; their only token is the admin token, so a failed
+ * lookup reads as admin.
+ */
+export async function fetchMe(url: string, token: string): Promise<ServerIdentity> {
+  try {
+    const res = await request(url, token, "/v1/me");
+    const body = (await res.json()) as { kind?: unknown; id?: unknown; name?: unknown };
+    if (body.kind === "user" && typeof body.id === "string" && typeof body.name === "string") {
+      return { kind: "user", id: body.id, name: body.name };
+    }
+    return { kind: "admin" };
+  } catch {
+    return { kind: "admin" };
+  }
+}
+
+/** The server's user directory: names and ids only, never token material. */
+export async function listUsers(url: string, token: string): Promise<DirectoryUser[]> {
+  const res = await request(url, token, "/v1/users");
+  const body: unknown = await res.json();
+  if (!Array.isArray(body)) return [];
+  return body.filter(
+    (user): user is DirectoryUser =>
+      !!user && typeof user === "object" && typeof (user as DirectoryUser).id === "string" && typeof (user as DirectoryUser).name === "string",
+  );
+}
+
+/** Admin only. The returned personal token is shown once and never stored by the server in raw form. */
+export async function createUser(url: string, token: string, name: string): Promise<{ id: string; name: string; token: string }> {
+  const res = await request(url, token, "/v1/users", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  const body = (await res.json()) as { id?: unknown; name?: unknown; token?: unknown };
+  if (typeof body.id !== "string" || typeof body.name !== "string" || typeof body.token !== "string") {
+    throw new Error("Server did not return a user token.");
+  }
+  return { id: body.id, name: body.name, token: body.token };
+}
+
+/** Admin only. Revokes the user's access and unshares everything shared with them. */
+export async function deleteUser(url: string, token: string, id: string): Promise<void> {
+  await request(url, token, `/v1/users/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

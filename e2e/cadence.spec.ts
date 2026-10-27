@@ -314,3 +314,78 @@ test("sidebar hosts All Tasks, Workflow, and Projects", async ({ page }, testInf
   await expect(page.getByText("Project QA toduck", { exact: true })).toBeVisible();
   await expect(page.getByText("Sidebar QA toduck", { exact: true })).toHaveCount(0);
 });
+
+test("multi-user: admin creates a user, shares a toduck, and the user's token sees only the shared one", async ({ page }, testInfo) => {
+  const port = 18793 + testInfo.workerIndex;
+  const server = await startSyncServer(port);
+  try {
+    // Connect as admin.
+    await openSidebarIfNeeded(page);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Address").fill(`http://127.0.0.1:${port}`);
+    await page.getByLabel("Token").fill(token);
+    await page.getByRole("button", { name: "Save and sync" }).click();
+    await expect(page.getByText(/Connected\./)).toBeVisible();
+
+    // Create a user from the admin Users panel and capture the one-time token.
+    await page.getByLabel("New user's name").fill("Teammate");
+    await page.getByRole("button", { name: "Create user" }).click();
+    const tokenField = page.getByLabel("New user token");
+    await expect(tokenField).toBeVisible();
+    await expect(page.getByText(/Shown once/)).toBeVisible();
+    const userToken = await tokenField.inputValue();
+    expect(userToken.length).toBeGreaterThanOrEqual(32);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // On mobile the drawer the Settings button lived in is still open.
+    await closeSidebarIfOpen(page);
+
+    // Two toducks as admin (they sync to the server).
+    for (const name of ["Shared QA toduck", "Private QA toduck"]) {
+      await page.getByLabel("New toduck").fill(name);
+      await page.getByRole("button", { name: "Add", exact: true }).click();
+      await expect(page.getByText(name, { exact: true })).toBeVisible();
+    }
+
+    // Wait until the server holds both, then share one with Teammate.
+    const adminHeaders = { authorization: `Bearer ${token}` };
+    await expect
+      .poll(async () => {
+        const remote = await fetch(`http://127.0.0.1:${port}/v1/state`, { headers: adminHeaders });
+        const body = (await remote.json()) as { tasks?: Array<{ title?: string }> };
+        return body.tasks?.filter((task) => task.title?.endsWith("QA toduck")).length ?? 0;
+      })
+      .toBe(2);
+
+    await page.getByRole("button", { name: "Details for Shared QA toduck" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel(/Share with Teammate/).check();
+    await page.waitForTimeout(300);
+    await dialog.getByRole("button", { name: "Close" }).click();
+
+    // The directory gives Teammate's id; the share must reach the server.
+    const directory = (await (await fetch(`http://127.0.0.1:${port}/v1/users`, { headers: adminHeaders })).json()) as Array<{ id: string; name: string }>;
+    const teammate = directory.find((user) => user.name === "Teammate");
+    if (!teammate) throw new Error("Teammate missing from the directory");
+    await expect
+      .poll(async () => {
+        const remote = await fetch(`http://127.0.0.1:${port}/v1/state`, { headers: adminHeaders });
+        const body = (await remote.json()) as { tasks?: Array<{ title?: string; sharedWith?: string[] }> };
+        return body.tasks?.find((task) => task.title === "Shared QA toduck")?.sharedWith ?? [];
+      })
+      .toEqual([teammate.id]);
+
+    // The user's own token sees the shared toduck — and not the private one.
+    const asUser = await fetch(`http://127.0.0.1:${port}/v1/state`, {
+      headers: { authorization: `Bearer ${userToken}` },
+    });
+    expect(asUser.status).toBe(200);
+    const userBody = (await asUser.json()) as { tasks?: Array<{ title?: string }> };
+    const titles = (userBody.tasks ?? []).map((task) => task.title);
+    expect(titles).toContain("Shared QA toduck");
+    expect(titles).not.toContain("Private QA toduck");
+  } finally {
+    server.child.kill();
+    await rm(server.directory, { recursive: true, force: true });
+  }
+});

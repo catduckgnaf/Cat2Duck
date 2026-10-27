@@ -37,6 +37,10 @@ export type Task = {
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
+  /** Registered user who owns this toduck; null = legacy / not owned by a user. */
+  ownerId: string | null;
+  /** Registered user ids this toduck is shared with (editable by them). */
+  sharedWith: string[];
 };
 
 export type ViewId =
@@ -494,13 +498,17 @@ export function countFor(
   return visibleTasks(tasks, categories, view, focusDate, today, refine, projects).length;
 }
 
-function stamp(partial: Omit<Task, "createdAt" | "updatedAt" | "completedAt" | "done" | "deleted"> & Partial<Task>): Task {
+function stamp(
+  partial: Omit<Task, "createdAt" | "updatedAt" | "completedAt" | "done" | "deleted" | "ownerId" | "sharedWith"> & Partial<Task>,
+): Task {
   const now = new Date().toISOString();
   return {
     done: false,
     completedAt: null,
     createdAt: now,
     updatedAt: now,
+    ownerId: null,
+    sharedWith: [],
     ...partial,
   };
 }

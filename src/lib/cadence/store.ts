@@ -61,6 +61,7 @@ type State = {
   undo: () => void;
   addTask: (input: TaskInput) => void;
   updateTask: (id: string, patch: Partial<TaskInput>, notice?: string) => void;
+  setTaskSharing: (id: string, sharedWith: string[]) => void;
   moveTask: (id: string, date: string | null) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
@@ -140,6 +141,8 @@ export const useCadence = create<State>()(
           completedAt: null,
           createdAt: now,
           updatedAt: now,
+          ownerId: null,
+          sharedWith: [],
         };
         const prev = get();
         set({
@@ -167,6 +170,18 @@ export const useCadence = create<State>()(
         set({
           tasks,
           notice: notice ? noticeOf(notice, prev.tasks, prev.categories, prev.projects) : prev.notice,
+        });
+      },
+      setTaskSharing: (id, sharedWith) => {
+        const prev = get();
+        const task = prev.tasks.find((item) => item.id === id);
+        if (!task) return;
+        const next = [...new Set(sharedWith)];
+        if (JSON.stringify(next) === JSON.stringify(task.sharedWith ?? [])) return;
+        const now = nowIso();
+        set({
+          tasks: prev.tasks.map((item) => (item.id === id ? { ...item, sharedWith: next, updatedAt: now } : item)),
+          notice: noticeOf(next.length ? "Sharing updated" : "Sharing removed", prev.tasks, prev.categories, prev.projects),
         });
       },
       moveTask: (id, date) => {
@@ -315,7 +330,7 @@ export const useCadence = create<State>()(
     }),
     {
       name: "cadence",
-      version: 4,
+      version: 5,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as {
           view?: ViewId;
@@ -330,6 +345,15 @@ export const useCadence = create<State>()(
           // tasks have no projectId.
           state.projects = [];
           state.tasks = (state.tasks ?? []).map((task) => ({ ...task, projectId: task.projectId ?? null }));
+        }
+        if (version < 5) {
+          // Ownership/sharing arrived in v5; older tasks are unowned and
+          // shared with nobody.
+          state.tasks = (state.tasks ?? []).map((task) => ({
+            ...task,
+            ownerId: task.ownerId ?? null,
+            sharedWith: task.sharedWith ?? [],
+          }));
         }
         return state;
       },
@@ -373,7 +397,12 @@ function finishHydration() {
       ? state.categoryFilter
       : null;
   const projects = state.projects ?? [];
-  const tasks = state.tasks.map((task) => (task.projectId === undefined ? { ...task, projectId: null } : task));
+  const tasks = state.tasks.map((task) => ({
+    ...task,
+    projectId: task.projectId === undefined ? null : task.projectId,
+    ownerId: task.ownerId === undefined ? null : task.ownerId,
+    sharedWith: task.sharedWith ?? [],
+  }));
   const projectFilter =
     state.projectFilter && projects.some((p) => p.id === state.projectFilter && !p.deleted) ? state.projectFilter : null;
   useCadence.setState({ hasHydrated: true, focusDate, categoryFilter, projects, tasks, projectFilter });

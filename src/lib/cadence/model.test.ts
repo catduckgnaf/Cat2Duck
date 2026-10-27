@@ -75,6 +75,8 @@ describe("repeats", () => {
       completedAt: null,
       createdAt: "a",
       updatedAt: "a",
+      ownerId: null,
+      sharedWith: [],
     };
     const refine = { query: "", categoryId: null, projectId: null, showRepeating: true };
     assert.equal(visibleTasks([daily], [], "overdue", "2026-09-25", "2026-09-25", refine).length, 1);
@@ -119,6 +121,8 @@ describe("filters", () => {
       completedAt: null,
       createdAt: "a",
       updatedAt: "a",
+      ownerId: null,
+      sharedWith: [],
     },
     {
       id: "2",
@@ -132,6 +136,8 @@ describe("filters", () => {
       completedAt: null,
       createdAt: "b",
       updatedAt: "b",
+      ownerId: null,
+      sharedWith: [],
     },
   ];
 
@@ -185,6 +191,8 @@ describe("all, workflow, and projects views", () => {
     completedAt: null,
     createdAt: "a",
     updatedAt: "a",
+    ownerId: null,
+    sharedWith: [] as string[],
   };
   const tasks: Task[] = [
     { ...base, id: "overdue", title: "Overdue one", date: "2026-09-24", done: false },
