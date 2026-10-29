@@ -92,12 +92,14 @@ private fun ToduckApp() {
         if (view == "done") return@filter task.done
         if (task.done) return@filter false
         when (view) {
-            "feed" -> true
+            "all", "feed" -> true
             "today" -> task.date == today
             "upcoming" -> task.date != null && task.date > today
             "overdue" -> task.date != null && task.date < today
             "later" -> task.date == null
             "repeats" -> task.repeat.kind != "none"
+            "workflow" -> true
+            "projects" -> true
             else -> false
         }
     }
@@ -108,7 +110,7 @@ private fun ToduckApp() {
             TextButton(onClick = { settings = true }) { Text("Settings") }
         }
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("feed", "today", "upcoming", "overdue", "later", "repeats", "done").forEach { id ->
+            listOf("all", "feed", "today", "upcoming", "overdue", "later", "repeats", "done", "workflow", "projects").forEach { id ->
                 Filter(id.replaceFirstChar { it.uppercase() }, view == id) { view = id }
             }
         }
@@ -117,7 +119,8 @@ private fun ToduckApp() {
                 Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).clickable { editing = task }) {
                         Text(task.title, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val meta = listOfNotNull(names[task.categoryId], repeatLabel(task.repeat).takeIf { task.repeat.kind != "none" }, task.date ?: "No date")
+                        val projectName = doc.projects.find { it.id == task.projectId && !it.deleted }?.name
+                        val meta = listOfNotNull(names[task.categoryId], projectName, repeatLabel(task.repeat).takeIf { task.repeat.kind != "none" }, task.date ?: "No date")
                         Text(meta.joinToString(" · "), color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     IconButton(onClick = { commit(doc.copy(tasks = doc.tasks.map { if (it.id == task.id) advance(it) else it })) }) {
@@ -139,7 +142,7 @@ private fun ToduckApp() {
                 val title = draft.trim()
                 if (title.isEmpty()) return@Button
                 val now = java.time.Instant.now().toString()
-                val task = Task(newId(), title, "", categoryId, if (view == "later") null else today, Repeat(), false, null, now, now)
+                val task = Task(newId(), title, "", categoryId, null, if (view == "later") null else today, Repeat(), false, null, now, now)
                 commit(doc.copy(tasks = listOf(task) + doc.tasks))
                 draft = ""
             }) { Text("Add") }

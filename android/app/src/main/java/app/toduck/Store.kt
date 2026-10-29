@@ -18,7 +18,7 @@ object Store {
         return try {
             parseDoc(raw)
         } catch (_: Exception) {
-            Doc(emptyList(), emptyList())
+            Doc(emptyList(), emptyList(), emptyList())
         }
     }
 
@@ -66,7 +66,11 @@ object Store {
         var current = local
         repeat(3) { attempt ->
             val remote = http(base, token, "GET", null, null)
-            current = Doc(mergeTasks(current.tasks, remote.doc.tasks), mergeCategories(current.categories, remote.doc.categories))
+            current = Doc(
+                mergeTasks(current.tasks, remote.doc.tasks),
+                mergeCategories(current.categories, remote.doc.categories),
+                mergeProjects(current.projects, remote.doc.projects),
+            )
             val saved = http(base, token, "PUT", current.toJson(), remote.revision)
             if (saved.code == 200) return current
             if (saved.code != 409 || attempt == 2) error(saved.text.ifBlank { "Server responded ${saved.code}" })
@@ -86,6 +90,16 @@ object Store {
 
     private fun mergeCategories(local: List<Category>, remote: List<Category>): List<Category> {
         val map = linkedMapOf<String, Category>()
+        remote.forEach { map[it.id] = it }
+        local.forEach { item ->
+            val other = map[item.id]
+            if (other == null || item.updatedAt > other.updatedAt) map[item.id] = item
+        }
+        return map.values.toList()
+    }
+
+    private fun mergeProjects(local: List<Project>, remote: List<Project>): List<Project> {
+        val map = linkedMapOf<String, Project>()
         remote.forEach { map[it.id] = it }
         local.forEach { item ->
             val other = map[item.id]
