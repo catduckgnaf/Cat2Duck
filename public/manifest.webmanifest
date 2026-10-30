@@ -1,0 +1,26 @@
+{
+  "name": "Toduck",
+  "short_name": "Toduck",
+  "description": "A calm, local-first task manager. Repeats show once; checking one moves it forward.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#141311",
+  "theme_color": "#141311",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/__grok/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

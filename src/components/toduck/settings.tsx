@@ -3,6 +3,11 @@ import { Trash2 } from "lucide-react";
 import { Button, Modal, SectionLabel } from "@/components/toduck/ui";
 import { activeCategories, activeProjects } from "@/lib/toduck/model";
 import { useToduck } from "@/lib/toduck/store";
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
 import {
   checkServer,
   createUser,
@@ -290,6 +295,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [token, setToken] = useState(serverToken);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallEvent(e as BeforeInstallPromptEvent);
+    };
+    const onInstalled = () => setInstalled(true);
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  async function install() {
+    if (!installEvent) return;
+    await installEvent.prompt();
+    const { outcome } = await installEvent.userChoice;
+    if (outcome === "accepted") setInstalled(true);
+    setInstallEvent(null);
+  }
 
   async function saveServer() {
     const next = normalizeServerUrl(url);
@@ -344,6 +373,21 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       title="Settings"
       description="This device keeps your list. Connect a server when you want the Android app to share it."
     >
+      <section className="mb-6">
+        <SectionLabel>Install</SectionLabel>
+        <p className="mt-2 text-sm text-muted">
+          Add Toduck to your home screen for a full-screen app. Works offline after the first load.
+        </p>
+        {installed ? (
+          <p className="mt-2 text-sm text-sage">Installed.</p>
+        ) : installEvent ? (
+          <Button className="mt-3" variant="primary" onClick={() => void install()}>
+            Install app
+          </Button>
+        ) : (
+          <p className="mt-2 text-sm text-muted">Use your browser’s “Add to Home Screen” or install menu.</p>
+        )}
+      </section>
       <section>
         <SectionLabel>Your server</SectionLabel>
         <p className="mt-2 text-sm text-pretty text-muted">
