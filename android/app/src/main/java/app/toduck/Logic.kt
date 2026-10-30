@@ -20,11 +20,20 @@ data class Category(
     val deleted: Boolean = false,
 )
 
+data class Project(
+    val id: String,
+    val name: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val deleted: Boolean = false,
+)
+
 data class Task(
     val id: String,
     val title: String,
     val notes: String,
     val categoryId: String?,
+    val projectId: String? = null,
     val date: String?,
     val repeat: Repeat,
     val done: Boolean,
@@ -32,9 +41,15 @@ data class Task(
     val createdAt: String,
     val updatedAt: String,
     val deleted: Boolean = false,
+    val ownerId: String? = null,
+    val sharedWith: List<String> = emptyList(),
 )
 
-data class Doc(val tasks: List<Task>, val categories: List<Category>)
+data class Doc(
+    val tasks: List<Task>,
+    val categories: List<Category>,
+    val projects: List<Project> = emptyList(),
+)
 
 fun todayKey(): String = toKey(Calendar.getInstance())
 
@@ -142,7 +157,11 @@ fun newId(): String = UUID.randomUUID().toString()
 
 fun parseDoc(raw: String): Doc {
     val root = JSONObject(raw.ifBlank { "{}" })
-    return Doc(parseTasks(root.optJSONArray("tasks")), parseCategories(root.optJSONArray("categories")))
+    return Doc(
+        parseTasks(root.optJSONArray("tasks")),
+        parseCategories(root.optJSONArray("categories")),
+        parseProjects(root.optJSONArray("projects")),
+    )
 }
 
 private fun parseTasks(array: JSONArray?): List<Task> {
@@ -160,6 +179,7 @@ private fun parseTasks(array: JSONArray?): List<Task> {
                     title = o.optString("title"),
                     notes = o.optString("notes"),
                     categoryId = if (!o.has("categoryId") || o.isNull("categoryId")) null else o.getString("categoryId"),
+                    projectId = if (!o.has("projectId") || o.isNull("projectId")) null else o.getString("projectId"),
                     date = if (!o.has("date") || o.isNull("date")) null else o.getString("date"),
                     repeat = Repeat(
                         kind = repeat?.optString("kind", "none") ?: "none",
@@ -172,6 +192,11 @@ private fun parseTasks(array: JSONArray?): List<Task> {
                     createdAt = o.optString("createdAt"),
                     updatedAt = o.optString("updatedAt"),
                     deleted = o.optBoolean("deleted", false),
+                    ownerId = if (!o.has("ownerId") || o.isNull("ownerId")) null else o.getString("ownerId"),
+                    sharedWith = buildList {
+                        val arr = o.optJSONArray("sharedWith")
+                        if (arr != null) for (j in 0 until arr.length()) add(arr.optString(j))
+                    },
                 ),
             )
         }
@@ -185,6 +210,24 @@ private fun parseCategories(array: JSONArray?): List<Category> {
             val o = array.optJSONObject(i) ?: continue
             add(
                 Category(
+                    id = o.optString("id"),
+                    name = o.optString("name"),
+                    createdAt = o.optString("createdAt"),
+                    updatedAt = o.optString("updatedAt"),
+                    deleted = o.optBoolean("deleted", false),
+                ),
+            )
+        }
+    }
+}
+
+private fun parseProjects(array: JSONArray?): List<Project> {
+    if (array == null) return emptyList()
+    return buildList {
+        for (i in 0 until array.length()) {
+            val o = array.optJSONObject(i) ?: continue
+            add(
+                Project(
                     id = o.optString("id"),
                     name = o.optString("name"),
                     createdAt = o.optString("createdAt"),
@@ -210,13 +253,16 @@ fun Doc.toJson(): String {
                 .put("title", task.title)
                 .put("notes", task.notes)
                 .put("categoryId", task.categoryId ?: JSONObject.NULL)
+                .put("projectId", task.projectId ?: JSONObject.NULL)
                 .put("date", task.date ?: JSONObject.NULL)
                 .put("repeat", repeat)
                 .put("done", task.done)
                 .put("completedAt", task.completedAt ?: JSONObject.NULL)
                 .put("createdAt", task.createdAt)
                 .put("updatedAt", task.updatedAt)
-                .put("deleted", task.deleted),
+                .put("deleted", task.deleted)
+                .put("ownerId", task.ownerId ?: JSONObject.NULL)
+                .put("sharedWith", JSONArray(task.sharedWith)),
         )
     }
     val categories = JSONArray()
@@ -230,5 +276,16 @@ fun Doc.toJson(): String {
                 .put("deleted", category.deleted),
         )
     }
-    return JSONObject().put("tasks", tasks).put("categories", categories).toString()
+    val projects = JSONArray()
+    for (project in this.projects) {
+        projects.put(
+            JSONObject()
+                .put("id", project.id)
+                .put("name", project.name)
+                .put("createdAt", project.createdAt)
+                .put("updatedAt", project.updatedAt)
+                .put("deleted", project.deleted),
+        )
+    }
+    return JSONObject().put("tasks", tasks).put("categories", categories).put("projects", projects).toString()
 }
